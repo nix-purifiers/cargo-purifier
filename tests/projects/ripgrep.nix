@@ -36,8 +36,11 @@ in
     touch $out
   '';
 
+  # A stdenv build, not runCommand with stdenv.cc: on darwin, stdenv also
+  # brings the SDK and nixpkgs' libiconv, which the libc crate links and
+  # nixpkgs' SDK leaves out.
   composition-real-project =
-    pkgs.runCommand "ripgrep-projected-native-consumer"
+    pkgs.runCommandCC "ripgrep-projected-native-consumer"
       {
         nativeBuildInputs = [
           pkgs.cargo
@@ -64,8 +67,11 @@ in
   # run, test, rust-analyzer, and a new dependency that Cargo.lock lacks. The
   # lockfile stays outside ripgrep's tree, named by CARGO_PURIFIER_LOCKFILE.
   # The sandbox has no Nix daemon, so a stand-in nix-build answers the
-  # wrapper with the vendored sources its own expression builds.
-  ripgrep-develop = pkgs.runCommand "ripgrep-develop" { nativeBuildInputs = [ cargo-purifier ]; } ''
+  # wrapper with the vendored sources its own expression builds. The build
+  # has a C compiler, as a developer's machine does: on darwin, stdenv also
+  # brings the SDK and nixpkgs' libiconv, which the libc crate links and
+  # nixpkgs' SDK leaves out.
+  ripgrep-develop = pkgs.runCommandCC "ripgrep-develop" { nativeBuildInputs = [ cargo-purifier ]; } ''
     export HOME=$PWD/home CARGO_HOME=$PWD/cargo-home
     export CARGO_PURIFIER_LOCKFILE=${lockFile}
     cp -r ${src} ripgrep

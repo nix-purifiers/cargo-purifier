@@ -72,7 +72,9 @@ relock tampered-git-hash 'lock["git"][0]["hash"] = "sha256-AAAAAAAAAAAAAAAAAAAAA
 expect_failure tampered-git-hash 'hash mismatch'
 
 new_case tampered-checksum
-sed -i 's/^checksum = "8f/checksum = "00/' "$work/tampered-checksum/Cargo.lock"
+# Through a copy: macOS's sed -i takes a backup suffix.
+sed 's/^checksum = "8f/checksum = "00/' "$work/tampered-checksum/Cargo.lock" >"$work/Cargo.lock"
+mv "$work/Cargo.lock" "$work/tampered-checksum/Cargo.lock"
 relock tampered-checksum 'pass'
 expect_failure tampered-checksum 'hash mismatch'
 

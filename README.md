@@ -313,7 +313,7 @@ A path dependency outside the workspace root builds when `src` is a
 directory that holds both, and `workspace` names the workspace inside it,
 as in `{ src = ./.; workspace = "app"; }`. The builds use the package set's
 Rust toolchain, and do not read `rust-toolchain.toml`. cargo-purifier runs
-on x86_64-linux and aarch64-linux.
+on x86_64-linux, aarch64-linux and aarch64-darwin.
 
 ### What the purifier lockfile holds
 

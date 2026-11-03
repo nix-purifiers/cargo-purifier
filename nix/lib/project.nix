@@ -136,6 +136,13 @@ let
     prePatch = ''
       cp ${cargoLock} ${lib.escapeShellArg workspace}/Cargo.lock
       chmod u+w ${lib.escapeShellArg workspace}/Cargo.lock
+    ''
+    # The vendored crates' paths, such as the file a panic message names,
+    # are under the build directory. The Linux sandbox always builds in
+    # /build, but darwin builds in a new directory every time, so rustc
+    # writes them as under /build there too.
+    + lib.optionalString stdenv.hostPlatform.isDarwin ''
+      export NIX_RUSTFLAGS="''${NIX_RUSTFLAGS:-} --remap-path-prefix=$NIX_BUILD_TOP=/build"
     '';
     postPatch = ''
       ${lib.optionalString (dependencies != [ ]) ''

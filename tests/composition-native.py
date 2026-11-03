@@ -20,7 +20,8 @@ def run(*args, cwd=None, env=None):
 snapshot = json.loads(run('nix', 'flake', 'archive', '--json', '--no-write-lock-file', sdk))['path']
 system = run('nix', 'eval', '--impure', '--raw', '--expr', 'builtins.currentSystem').strip()
 with tempfile.TemporaryDirectory(prefix='cargo-composition-') as temporary:
-    root = Path(temporary)
+    # Nix refuses a path: flake through a symlink, such as macOS's /tmp.
+    root = Path(temporary).resolve()
     producer, consumer = root / 'producer', root / 'consumer'
     producer.mkdir()
     (consumer / 'src').mkdir(parents=True)

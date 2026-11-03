@@ -33,6 +33,10 @@ pkgs.runCommand "local-registry"
     git config --global init.defaultBranch main
 
     python3 ${./registry-server.py} port www &
+    # Darwin builds have no PID namespace, so a server left running
+    # would keep the build's log open after the builder exits.
+    server=$!
+    trap 'kill $server' EXIT
     mkdir -p www
     while [ ! -s port ]; do sleep 0.1; done
     port=$(cat port)
