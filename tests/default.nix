@@ -126,6 +126,9 @@ let
 in
 realWorld
 // lib.optionalAttrs (system == "x86_64-linux") {
+  historical-target-abi = import ./historical-rust.nix {
+    inherit pkgs historicalRustSource buildCargoProject;
+  };
   historical-native-selection =
     let
       old = import historicalRustSource { inherit system; };
