@@ -268,12 +268,26 @@ edition 2021 or the newer global `--config` argument on the selected resolver.
 Workspace discovery asks native Cargo for dependency-free offline metadata,
 without resolving dependencies or generating a lock.
 
-These checks cover those resolver and workspace APIs only. They do not prove
-historical project compilation, MSRV, target ABI, offline wrapper execution or
-publication. Older Cargo still encounters the main wrapper's newer `--config`
-usage, and historical compiler/build-hook compatibility remains separate work.
-Earlier releases and usable prereleases remain eligible; tested points are
-neither a minimum supported version nor a version whitelist.
+The resolver checks do not establish project compilation or publication by
+themselves. A separate x86_64 Linux fixture selects both Cargo and rustc 1.41.0
+through `makeRustPlatform` and the builder's `rustPlatform` override. It builds
+and runs a binary, runs unit tests, calls a compiled `cdylib` from C, verifies
+the native `.crate`, and rebuilds and runs the extracted crate with that same
+historical compiler as an ordinary project.
+
+For Cargo before stable named profiles, the builder uses native `--release`
+build/test commands instead of the newer Nix build hooks' `--profile release`.
+Native metadata selects a package manifest for archive creation, because
+Cargo 1.41's package command has no `--package` option. This historical build
+path uses the selected tools directly and does not add current cargo-auditable
+instrumentation.
+
+This is one compiler/target-ABI point, not a historical MSRV interval. It does
+not establish the older main wrapper's `--config` path, namespaced projected
+registry consumption, CLI publication, cross compilation, other architectures
+or earlier compiler APIs. Those remain explicit adapter and test work. Earlier
+releases and usable prereleases remain eligible; tested points are neither a
+minimum supported version nor a version whitelist.
 
 ## Working offline
 

@@ -1,0 +1,1 @@
+fn main() { let x = std::process::Command::new(std::env::var("RUSTC").unwrap_or("rustc".into())).arg("--version").output().unwrap(); println!("cargo:rustc-env=SELECTED_RUSTC={}", String::from_utf8(x.stdout).unwrap().trim()); }

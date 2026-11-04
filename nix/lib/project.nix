@@ -170,29 +170,66 @@ let
 
   hasOutputs = info: info.bins != [ ] || libFiles info != [ ];
 
+  # Named profile CLI support became stable in Cargo 1.57. Current nixpkgs
+  # hooks pass --profile release; older native Cargo uses --release instead.
+  # https://blog.rust-lang.org/2021/12/02/Rust-1.57.0/
+  legacyProfileCli = lib.versionOlder rustPlatform.rust.cargo.version "1.57";
+  rustTarget = stdenv.hostPlatform.rust.rustcTarget;
+
   mkPackage =
     name: info:
     let
-      drv = rustPlatform.buildRustPackage (
-        common
-        // {
-          pname = name;
-          inherit (info) version;
-          inherit doCheck;
-          passthru = { inherit projections; };
-          cargoBuildFlags = [
-            "--package"
-            name
-          ];
-          cargoTestFlags = [
-            "--package"
-            name
-          ];
-          meta = lib.optionalAttrs (lib.length info.bins == 1) {
-            mainProgram = lib.head info.bins;
-          };
-        }
-      );
+      drv =
+        if legacyProfileCli then
+          cargoRun {
+            pname = name;
+            inherit (info) version;
+            inherit doCheck;
+            passthru = { inherit projections; };
+            meta = lib.optionalAttrs (lib.length info.bins == 1) { mainProgram = lib.head info.bins; };
+            buildPhase = ''
+              runHook preBuild
+              ${enterWorkspace}cargo build --frozen --offline --release --target ${rustTarget} --package ${lib.escapeShellArg name}
+              runHook postBuild
+            '';
+            checkPhase = ''
+              runHook preCheck
+              cargo test --frozen --offline --release --target ${rustTarget} --package ${lib.escapeShellArg name}
+              runHook postCheck
+            '';
+            installPhase = ''
+              runHook preInstall
+              mkdir -p "$out/bin" "$out/lib"
+              ${lib.concatMapStrings (bin: ''
+                cp target/${rustTarget}/release/${lib.escapeShellArg bin} "$out/bin/"
+              '') info.bins}
+              ${lib.concatMapStrings (file: ''
+                cp target/${rustTarget}/release/${lib.escapeShellArg file} "$out/lib/"
+              '') (libFiles info)}
+              runHook postInstall
+            '';
+          }
+        else
+          rustPlatform.buildRustPackage (
+            common
+            // {
+              pname = name;
+              inherit (info) version;
+              inherit doCheck;
+              passthru = { inherit projections; };
+              cargoBuildFlags = [
+                "--package"
+                name
+              ];
+              cargoTestFlags = [
+                "--package"
+                name
+              ];
+              meta = lib.optionalAttrs (lib.length info.bins == 1) {
+                mainProgram = lib.head info.bins;
+              };
+            }
+          );
     in
     drv
     // {
@@ -239,7 +276,18 @@ let
             # sources and the vendored ones.
             buildPhase = ''
               runHook preBuild
-              ${enterWorkspace}cargo package --frozen --package ${lib.escapeShellArg name}
+              ${enterWorkspace}${
+                if legacyProfileCli then
+                  ''
+                    manifest=$(cargo metadata --offline --no-deps --format-version 1 | ${lib.getExe python3} -c \
+                      'import json,sys; print(next(p["manifest_path"] for p in json.load(sys.stdin)["packages"] if p["name"] == sys.argv[1]))' ${lib.escapeShellArg name})
+                    cargo package --frozen --manifest-path "$manifest"
+                  ''
+                else
+                  ''
+                    cargo package --frozen --package ${lib.escapeShellArg name}
+                  ''
+              }
               runHook postBuild
             '';
             installPhase = ''

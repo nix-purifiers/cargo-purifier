@@ -1,0 +1,20 @@
+{
+  "cargoLock": "sha256-LdABNFWFp/qksljISD0pqrsTiYp5GEl0Dr2rFlZqREs=",
+  "contentHash": "sha256-/PmjW01aCTkY/6a0r+UWHhnqseL+OjXS4NqopC4uivI=",
+  "git": [],
+  "packages": {
+    "historical-target": {
+      "bins": [
+        "historical-target"
+      ],
+      "lib": {
+        "kinds": [
+          "cdylib"
+        ],
+        "name": "historical_target"
+      }
+    }
+  },
+  "registries": {},
+  "version": 1
+}

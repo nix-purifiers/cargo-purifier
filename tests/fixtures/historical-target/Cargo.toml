@@ -1,0 +1,8 @@
+[package]
+name="historical-target"
+version="0.1.0"
+authors=["Fixture"]
+edition="2018"
+[lib]
+crate-type=["cdylib"]
+[workspace]
