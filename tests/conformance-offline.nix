@@ -65,6 +65,7 @@ pkgs.runCommand "conformance-offline" { nativeBuildInputs = [ cargo-purifier ]; 
     exit 1
   fi
   grep -qF 'Run `cargo-purifier lock` to lock them' ../stderr || {
+    echo "missing-dependency rejection did not explain how to relock" >&2
     cat ../stderr >&2
     exit 1
   }
@@ -77,6 +78,7 @@ pkgs.runCommand "conformance-offline" { nativeBuildInputs = [ cargo-purifier ]; 
     exit 1
   fi
   grep -qF 'Run `cargo-purifier lock` if Cargo.lock changed' ../stderr || {
+    echo "changed-lock rejection did not explain how to relock" >&2
     cat ../stderr >&2
     exit 1
   }
