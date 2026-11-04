@@ -24,6 +24,14 @@ let
 
   registryUrls = import ../nix/lib/registry.nix { inherit lib; };
 
+  fixturePrefetch = import ../nix/lib/tool-prefetch.nix {
+    nixpkgs = pkgs.path;
+    inherit system;
+    src = ./fixtures/workspace;
+    lockFile = ./fixtures/workspace/cargo-purifier.lock.json;
+    tools = cargo-purifier;
+  };
+
   refuses = import ./refuses.nix { inherit pkgs; };
 
   # A workspace with a library from crates.io, a binary with a git
@@ -220,14 +228,25 @@ realWorld
 
   conformance-offline = import ./conformance-offline.nix {
     inherit pkgs cargo-purifier;
-    prefetched = import ../nix/lib/tool-prefetch.nix {
-      nixpkgs = pkgs.path;
-      inherit system;
-      src = ./fixtures/workspace;
-      lockFile = ./fixtures/workspace/cargo-purifier.lock.json;
-      tools = cargo-purifier;
-    };
+    prefetched = fixturePrefetch;
   };
+
+  conformance-concurrent-config =
+    pkgs.runCommand "conformance-concurrent-config"
+      {
+        nativeBuildInputs = [
+          pkgs.python3
+          pkgs.rustc
+        ];
+      }
+      ''
+        python3 ${./concurrent-config.py} \
+          --tools ${cargo-purifier} \
+          --cargo ${lib.getExe pkgs.cargo} \
+          --fixture ${./fixtures/workspace} \
+          --vendor ${fixturePrefetch}/vendor
+        touch $out
+      '';
 
   conformance-external = pkgs.runCommand "conformance-external" { } ''
     test "$(${lib.getExe external.packages.hello})" = "hello from 2 crates and 1.5"

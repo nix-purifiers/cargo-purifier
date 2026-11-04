@@ -132,8 +132,15 @@ writeShellApplication {
       stop "the locked sources did not build: ''${reason:-see $state/nix-build.log}. Run \`cargo-purifier lock\` if Cargo.lock changed, or \`cargo-purifier prefetch\` while online before working offline."
     fi
 
+    # rust-analyzer can run metadata and check concurrently. Never truncate
+    # the configuration another Cargo process is reading: an empty config
+    # silently disables vendoring and makes its offline resolution fail.
+    config=$(mktemp "$state/config.XXXXXX")
+    trap 'rm -f "$config"' EXIT
     sed "s|^directory = \"cargo-vendor-dir\"\$|directory = \"$vendor\"|" \
-      "$vendor/.cargo/config.toml" >"$state/config.toml"
+      "$vendor/.cargo/config.toml" >"$config"
+    mv -f "$config" "$state/config.toml"
+    trap - EXIT
 
     # A manifest that needs a dependency Cargo.lock lacks cannot resolve
     # from the vendored sources: cargo finds no such package there, or wants
