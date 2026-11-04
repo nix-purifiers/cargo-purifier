@@ -64,6 +64,7 @@
               inherit (self.lib.cargo-purifier) readLock;
               inherit (self.packages.${system}) cargo-purifier;
               inherit (inputs) ripgrep;
+              historicalRustSource = inputs.historical-rust;
             };
             treefmt.programs.nixfmt.enable = true;
           };

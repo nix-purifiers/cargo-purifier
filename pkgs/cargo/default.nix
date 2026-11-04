@@ -75,7 +75,7 @@ writeShellApplication {
       exec "$real" "$@"
     fi
 
-    manifest=$("$real" locate-project --workspace --message-format plain 2>/dev/null) || {
+    manifest=$(${lib.getExe command} _workspace-root 2>/dev/null) || {
       echo "cargo-purifier: warning: no cargo-purifier.lock.json found; running cargo impurely. Run \`cargo-purifier lock\` to use Nix-resolved dependencies." >&2
       exec "$real" "$@"
     }

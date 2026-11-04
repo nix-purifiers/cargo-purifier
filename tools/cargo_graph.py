@@ -38,15 +38,19 @@ class VersionSelector:
             root = Path(temporary)
             (root / 'src').mkdir()
             (root / 'src/lib.rs').write_text('')
-            (root / 'Cargo.toml').write_text('[package]\nname="purifier-selector"\nversion="0.0.0"\nedition="2021"\n[workspace]\n[dependencies]\npurifier-candidate=' + json.dumps(requirement) + '\n')
+            (root / 'Cargo.toml').write_text('[package]\nname="purifier-selector"\nversion="0.0.0"\nauthors=[]\n[workspace]\n[dependencies]\npurifier-candidate=' + json.dumps(requirement) + '\n')
             index = root / 'registry/index/pu/ri'
             index.mkdir(parents=True)
             records = [{'name': 'purifier-candidate', 'vers': version, 'deps': [],
                         'features': {}, 'yanked': False, 'cksum': '0' * 64} for version in versions]
             (index / 'purifier-candidate').write_text(''.join(json.dumps(record) + '\n' for record in records))
-            config = root / 'config.toml'
+            # The probe has no pre-existing project configuration. Use Cargo's
+            # longstanding project config file instead of the newer --config
+            # CLI, and the default 2015 edition rather than imposing 2021.
+            config = root / '.cargo/config'
+            config.parent.mkdir()
             config.write_text('[source.crates-io]\nreplace-with="candidates"\n[source.candidates]\nlocal-registry=' + json.dumps(str(root / 'registry')) + '\n')
-            result = subprocess.run([self.cargo, '--config', str(config), 'generate-lockfile', '--offline', '--quiet'],
+            result = subprocess.run([self.cargo, 'generate-lockfile', '--offline', '--quiet'],
                                     cwd=root, env=self.environment, text=True, capture_output=True)
             if result.returncode:
                 raise ValueError(f'Cargo cannot select {requirement!r} from {versions}: {result.stderr.strip()}')
