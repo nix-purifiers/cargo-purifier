@@ -50,7 +50,11 @@ pkgs.runCommand "conformance-offline" { nativeBuildInputs = [ cargo-purifier ]; 
     cat ../analysis >&2
     exit 1
   }
-  grep -q 'dependency lines of code: [1-9]' ../analysis
+  grep -q 'dependency lines of code: [1-9]' ../analysis || {
+    echo "rust-analyzer did not load the locked dependencies" >&2
+    cat ../analysis >&2
+    exit 1
+  }
 
   # A dependency missing from Cargo.lock stops the command, and names the
   # command that fixes it.
@@ -60,7 +64,10 @@ pkgs.runCommand "conformance-offline" { nativeBuildInputs = [ cargo-purifier ]; 
     echo "cargo built a dependency Cargo.lock lacks" >&2
     exit 1
   fi
-  grep -qF 'Run `cargo-purifier lock` to lock them' ../stderr
+  grep -qF 'Run `cargo-purifier lock` to lock them' ../stderr || {
+    cat ../stderr >&2
+    exit 1
+  }
   cp ../hello.toml hello/Cargo.toml
 
   # So does a Cargo.lock that changed since the lock.
@@ -69,7 +76,10 @@ pkgs.runCommand "conformance-offline" { nativeBuildInputs = [ cargo-purifier ]; 
     echo "cargo built from a Cargo.lock the purifier lockfile was not made from" >&2
     exit 1
   fi
-  grep -qF 'Run `cargo-purifier lock` if Cargo.lock changed' ../stderr
+  grep -qF 'Run `cargo-purifier lock` if Cargo.lock changed' ../stderr || {
+    cat ../stderr >&2
+    exit 1
+  }
 
   # Commands that read no sources run plain cargo.
   cargo --version | grep -q '^cargo '
