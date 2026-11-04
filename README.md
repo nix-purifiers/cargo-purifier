@@ -253,9 +253,27 @@ in
 This uses the purifier's pinned nixpkgs, matching the lock command above.
 To build with ambient `<nixpkgs>` from your Nix search path instead,
 replace `import purifier.inputs.nixpkgs` with `import <nixpkgs>`.
-Both forms need no Nix files in your project. The build tool and language
-versions must match the lockfile; with ambient nixpkgs, lock with the
-purifier from that package set or pass a compatible toolchain to the builder.
+Both forms need no Nix files in your project. Select a toolchain that can read
+the project's manifests and lock format, using the builder's `rustPlatform`
+override when needed. The purifier's default toolchain is not a requirement
+that projects use those same versions.
+
+### Toolchain compatibility evidence
+
+Native semver selection and workspace discovery are checked with Cargo
+1.41.0 on x86_64 Linux and with the current pinned Cargo on both Linux
+architectures. The private version-selection probe uses Cargo's default
+2015 edition and longstanding project configuration file; it does not impose
+edition 2021 or the newer global `--config` argument on the selected resolver.
+Workspace discovery asks native Cargo for dependency-free offline metadata,
+without resolving dependencies or generating a lock.
+
+These checks cover those resolver and workspace APIs only. They do not prove
+historical project compilation, MSRV, target ABI, offline wrapper execution or
+publication. Older Cargo still encounters the main wrapper's newer `--config`
+usage, and historical compiler/build-hook compatibility remains separate work.
+Earlier releases and usable prereleases remain eligible; tested points are
+neither a minimum supported version nor a version whitelist.
 
 ## Working offline
 

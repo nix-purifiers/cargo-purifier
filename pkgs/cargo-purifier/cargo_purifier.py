@@ -266,11 +266,11 @@ def workspace_root(manifest_path):
     manifest's directory here and from the workspace root afterwards."""
     if manifest_path:
         manifest = Path(manifest_path).resolve()
-        found = run(["cargo", "locate-project", "--workspace", "--message-format", "plain",
+        found = run(["cargo", "metadata", "--no-deps", "--offline", "--format-version", "1",
                      "--manifest-path", str(manifest)], cwd=manifest.parent)
     else:
-        found = run(["cargo", "locate-project", "--workspace", "--message-format", "plain"])
-    root_manifest = found.strip()
+        found = run(["cargo", "metadata", "--no-deps", "--offline", "--format-version", "1"])
+    root_manifest = str(Path(json.loads(found)["workspace_root"]) / "Cargo.toml")
     return Path(root_manifest).parent, root_manifest
 
 
@@ -814,6 +814,10 @@ def native_command(options):
 
 def main(argv):
     args = argv[1:]
+    if args and args[0] == "_workspace-root":
+        _, manifest = workspace_root(args[1] if len(args) > 1 else None)
+        print(manifest)
+        return 0
     # cargo runs an external subcommand with the subcommand's name first.
     if args[:1] == ["purifier"]:
         args = args[1:]

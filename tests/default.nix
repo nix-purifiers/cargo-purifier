@@ -14,6 +14,7 @@
   cargo-purifier,
   # ripgrep's source, pinned in tests/dependencies.
   ripgrep,
+  historicalRustSource,
 }:
 let
   inherit (pkgs) lib;
@@ -116,7 +117,48 @@ let
   };
 in
 realWorld
+// lib.optionalAttrs (system == "x86_64-linux") {
+  historical-native-selection =
+    let
+      old = import historicalRustSource { inherit system; };
+    in
+    pkgs.runCommand "cargo-1.41-native-selection"
+      {
+        nativeBuildInputs = [
+          pkgs.python3
+          old.cargo
+          old.rustc
+        ];
+      }
+      ''
+        export HOME="$TMPDIR/home"
+        export CARGO_COMPAT_NATIVE=${old.cargo}/bin/cargo
+        export CARGO_COMPAT_EXPECTED_VERSION=${old.cargo.version}
+        export CARGO_COMPAT_TOOLS=${../tools}
+        export CARGO_COMPAT_COMMAND=${../pkgs/cargo-purifier/cargo_purifier.py}
+        python3 ${./test_historical_cargo.py} -v
+        touch "$out"
+      '';
+}
 // {
+  current-native-selection =
+    pkgs.runCommand "cargo-current-native-selection"
+      {
+        nativeBuildInputs = [
+          pkgs.python3
+          pkgs.cargo
+          pkgs.rustc
+        ];
+      }
+      ''
+        export HOME="$TMPDIR/home"
+        export CARGO_COMPAT_NATIVE=${pkgs.cargo}/bin/cargo
+        export CARGO_COMPAT_EXPECTED_VERSION=${pkgs.cargo.version}
+        export CARGO_COMPAT_TOOLS=${../tools}
+        export CARGO_COMPAT_COMMAND=${../pkgs/cargo-purifier/cargo_purifier.py}
+        python3 ${./test_historical_cargo.py} -v
+        touch "$out"
+      '';
   composition-repository =
     pkgs.runCommand "cargo-repository-native-tests"
       {
