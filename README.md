@@ -448,6 +448,21 @@ When ripgrep releases a new version, move the `ripgrep` input to it, run the
 same `cargo-purifier lock` on a checkout of that version, and commit both
 files.
 
+## Native library projections
+
+Packages with an explicit Cargo `cdylib` target expose `projections.native`,
+`python-ffi`, and `java-ffi` alongside their existing Cargo source publication.
+The library path comes from the locked target name and selected host platform;
+the catalog records the Rust compiler version and crate type. Static libraries,
+ordinary Rust `dylib` targets, `rlib`s and binaries do not acquire foreign ABI
+projections. The crate must deliberately export a C ABI; symbol signatures,
+Rust object layouts and runtime dependencies remain its responsibility.
+
+The native views expose the shared catalog, Python ctypes loader and Java
+library paths. The check builds the workspace's real `ffi` cdylib and calls its
+`ffi_answer` symbol through ordinary Python ctypes and Java FFM. Java 21 needs
+its preview flags; this does not synthesize JNI bindings or Python wheels.
+
 ## Credits
 
 The purifier idea was inspired by nixcloud's

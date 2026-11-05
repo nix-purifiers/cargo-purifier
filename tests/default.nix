@@ -125,6 +125,14 @@ let
   };
 in
 realWorld
+// {
+  native-projections = import ./native-consumer.nix {
+    inherit pkgs;
+    projection = workspace.packages.ffi.projections;
+    library = "ffi";
+    symbol = "ffi_answer";
+  };
+}
 // lib.optionalAttrs (system == "x86_64-linux") {
   historical-target-abi = import ./historical-rust.nix {
     inherit pkgs historicalRustSource buildCargoProject;

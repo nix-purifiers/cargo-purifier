@@ -235,6 +235,24 @@ let
     // {
       bins = lib.genAttrs info.bins (bin: "${drv}/bin/${bin}");
       libs = lib.genAttrs (libFiles info) (file: "${drv}/lib/${file}");
+      projections =
+        projections
+        //
+          lib.optionalAttrs
+            (purifier != null && python3 != null && info.lib != null && lib.elem "cdylib" info.lib.kinds)
+            (
+              purifier.nativeProjections {
+                producer = drv;
+                libraries.${info.lib.name} =
+                  "lib/lib${info.lib.name}${stdenv.hostPlatform.extensions.sharedLibrary}";
+                system = stdenv.hostPlatform.system;
+                targetMetadata = {
+                  crateType = "cdylib";
+                  rustc = rustPlatform.rust.rustc.version;
+                };
+                inherit runCommand python3;
+              }
+            );
     };
 
   # A derivation that runs cargo in the build's source, with the vendored
