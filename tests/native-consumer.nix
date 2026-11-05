@@ -14,7 +14,7 @@ pkgs.runCommand "ordinary-native-foreign-consumers"
   }
   ''
     PYTHONPATH=${projection.python-ffi} python - <<'PY'
-    import ctypes, json, purifier_native
+    import ctypes, json, os, purifier_native
     library = purifier_native.load('${library}')
     call = getattr(library, '${symbol}')
     call.argtypes = []
@@ -22,6 +22,16 @@ pkgs.runCommand "ordinary-native-foreign-consumers"
     assert call() == 42
     catalog = json.load(open('${projection.native.catalog}'))
     assert catalog['system'] == '${pkgs.stdenv.hostPlatform.system}'
+    class DlInfo(ctypes.Structure):
+        _fields_ = [('filename', ctypes.c_char_p), ('base', ctypes.c_void_p),
+                    ('symbol', ctypes.c_char_p), ('address', ctypes.c_void_p)]
+    dladdr = ctypes.CDLL(None).dladdr
+    dladdr.argtypes = [ctypes.c_void_p, ctypes.POINTER(DlInfo)]
+    dladdr.restype = ctypes.c_int
+    actual = DlInfo()
+    assert dladdr(ctypes.cast(call, ctypes.c_void_p), ctypes.byref(actual)) != 0
+    expected = os.path.realpath(catalog['libraries']['${library}'])
+    assert os.path.realpath(actual.filename.decode()) == expected, actual.filename
     open('library-path', 'w').write(catalog['libraries']['${library}'])
     PY
     cat > Foreign.java <<'JAVA'
