@@ -260,6 +260,18 @@ that projects use those same versions.
 
 ### Toolchain compatibility evidence
 
+Required CI runs the full checks, native composition and lock/update/rebuild
+workflows on x86_64 Linux, aarch64 Linux and aarch64 macOS. The current stable
+profile additionally runs native composition, the full fixture suite and a
+pinned ripgrep 14.1.1 build with Rust/Cargo 1.99.1, including its grep-cli
+tests and the offline wrapper and rust-analyzer loop.
+The default nixpkgs toolchain remains separate from this selected profile.
+
+Rust supports its latest stable release. Keep the pinned current-stable profile
+up to date as releases change; beta and nightly channels are not credited by
+this profile. See [Rust's support policy](https://rust-lang.org/policies/security/).
+
+
 Native semver selection and workspace discovery are checked with Cargo
 1.41.0 on x86_64 Linux and with the current pinned Cargo on both Linux
 architectures. The private version-selection probe uses Cargo's default

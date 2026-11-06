@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-{ closure-lib, ... }:
+{ closure-lib, closure-inputs, ... }:
 {
   config,
   inputs,
@@ -58,14 +58,23 @@
         perSystem =
           { pkgs, system, ... }:
           {
-            checks = import ../../../tests {
-              inherit pkgs;
-              inherit ((pkgs.extend self.overlays.default).cargo-purifier) buildCargoProject;
-              inherit (self.lib.cargo-purifier) readLock;
-              inherit (self.packages.${system}) cargo-purifier;
-              inherit (inputs) ripgrep;
-              historicalRustSource = inputs.historical-rust;
-            };
+            checks =
+              import ../../../tests {
+                inherit pkgs;
+                inherit ((pkgs.extend self.overlays.default).cargo-purifier) buildCargoProject;
+                inherit (self.lib.cargo-purifier) readLock;
+                inherit (self.packages.${system}) cargo-purifier;
+                inherit (inputs) ripgrep;
+                historicalRustSource = inputs.historical-rust;
+              }
+              // import ../../../tests/current-stable.nix {
+                inherit pkgs;
+                overlay = self.overlays.default;
+                inherit (self.lib.cargo-purifier) readLock;
+                inherit (inputs) ripgrep;
+                historicalRustSource = inputs.historical-rust;
+                rustOverlaySource = closure-inputs.rust-overlay;
+              };
             treefmt.programs.nixfmt.enable = true;
           };
       };
