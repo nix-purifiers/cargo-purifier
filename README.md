@@ -266,6 +266,12 @@ profile additionally runs native composition, the full fixture suite and a
 pinned ripgrep 14.1.1 build with Rust/Cargo 1.99.1, including its grep-cli
 tests and the offline wrapper and rust-analyzer loop.
 The default nixpkgs toolchain remains separate from this selected profile.
+To use the current-stable wrappers, select the package in your normal Nix
+configuration, or start a shell:
+
+```sh
+nix shell github:nix-purifiers/cargo-purifier#current-stable
+```
 
 Rust supports its latest stable release. Keep the pinned current-stable profile
 up to date as releases change; beta and nightly channels are not credited by

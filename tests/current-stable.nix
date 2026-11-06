@@ -10,40 +10,10 @@
 }:
 let
   lib = pkgs.lib;
-  binaries = (pkgs.extend (import rustOverlaySource)).rust-bin;
-  toolchain = binaries.stable."1.99.1".default.override {
-    extensions = [
-      "rust-src"
-      "rust-analyzer"
-    ];
+  stable = import ../nix/lib/current-stable-scope.nix {
+    inherit pkgs overlay rustOverlaySource;
   };
-  executable =
-    name:
-    toolchain
-    // {
-      meta = toolchain.meta // {
-        mainProgram = name;
-      };
-    };
-  selected = pkgs // {
-    cargo = executable "cargo";
-    rustc = executable "rustc";
-    rust-analyzer = executable "rust-analyzer";
-    rustPlatform =
-      (pkgs.makeRustPlatform {
-        cargo = executable "cargo";
-        rustc = executable "rustc";
-      })
-      // {
-        rustLibSrc = "${toolchain}/lib/rustlib/src/rust/library";
-      };
-  };
-  scope = (pkgs.extend overlay).cargo-purifier.overrideScope (
-    _: _: {
-      pkgs = selected;
-      rustPlatform = selected.rustPlatform;
-    }
-  );
+  inherit (stable) selected scope toolchain;
   checks = import ./default.nix {
     pkgs = selected;
     inherit readLock ripgrep historicalRustSource;

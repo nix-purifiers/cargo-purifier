@@ -28,8 +28,7 @@ jobs:
       - name: Build the Cargo integration
         run: |
           if [ '${{ matrix.toolchain }}' = current-stable ]; then
-            system=$(nix eval --raw --impure --expr builtins.currentSystem)
-            nix build ".#checks.$system.current-stable-tools" --out-link "$RUNNER_TEMP/cargo-tools"
+            nix build .#current-stable --out-link "$RUNNER_TEMP/cargo-tools"
           else
             nix build --out-link "$RUNNER_TEMP/cargo-tools"
           fi
