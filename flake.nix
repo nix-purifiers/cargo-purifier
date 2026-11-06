@@ -9,6 +9,8 @@
     # for the lock in memory.
     purifier.url = "github:nix-purifiers/purifier";
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    rust-overlay.url = "github:oxalica/rust-overlay";
+    rust-overlay.inputs.nixpkgs.follows = "nixpkgs";
     # The library comes from the nixpkgs.lib mirror. The package sets
     # take nixpkgs.
     nixpkgs-lib.url = "github:nix-community/nixpkgs.lib";

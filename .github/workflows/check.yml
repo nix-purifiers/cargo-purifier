@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 #
-# Runs the test suite on both systems the flake supports, on every push to
+# Runs the test suite on Linux and Darwin systems the flake supports, on every push to
 # every branch and on every pull request. The flake's checks include the purifier
 # contract's conformance checks that the sandbox can run; the two that need
 # the network or a Nix daemon are the jobs of their names here.
@@ -19,23 +19,31 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+        runner: [ubuntu-24.04, ubuntu-24.04-arm, macos-latest]
+        toolchain: [default, current-stable]
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v31
       - name: Build the Cargo integration
-        run: nix build --out-link "$RUNNER_TEMP/cargo-tools"
+        run: |
+          if [ '${{ matrix.toolchain }}' = current-stable ]; then
+            system=$(nix eval --raw --impure --expr builtins.currentSystem)
+            nix build ".#checks.$system.current-stable-tools" --out-link "$RUNNER_TEMP/cargo-tools"
+          else
+            nix build --out-link "$RUNNER_TEMP/cargo-tools"
+          fi
+          "$RUNNER_TEMP/cargo-tools/bin/cargo" --version
       - name: Compose, edit, build, publish, and consume with ordinary Cargo
         run: |
-          nix shell 'nixpkgs#python3' -c \
+          nix shell --inputs-from . 'nixpkgs#python3' -c \
             python3 tests/composition-native.py "$RUNNER_TEMP/cargo-tools"
 
   check:
     strategy:
       fail-fast: false
       matrix:
-        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+        runner: [ubuntu-24.04, ubuntu-24.04-arm, macos-latest]
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -43,21 +51,21 @@ jobs:
       - name: Flake checks
         run: nix flake check --print-build-logs
       - name: Downloads whose hash the lockfiles get wrong
-        run: nix shell 'nixpkgs#python3' -c tests/negative.sh
+        run: nix shell --inputs-from . 'nixpkgs#python3' -c tests/negative.sh
 
   # Relocking a fixture reproduces its lockfile byte for byte.
   conformance-relock:
     strategy:
       fail-fast: false
       matrix:
-        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+        runner: [ubuntu-24.04, ubuntu-24.04-arm, macos-latest]
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v31
       - name: Relock the fixtures
         run: |
-          nix shell 'nixpkgs#python3' -c tests/relock-fixtures.sh
+          nix shell --inputs-from . 'nixpkgs#python3' -c tests/relock-fixtures.sh
           git diff --exit-code
       # The quickstart word for word, with the pushed commit, on ripgrep
       # 14.1.1: the lockfile must match the one the ripgrep checks build.
@@ -78,7 +86,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+        runner: [ubuntu-24.04, ubuntu-24.04-arm, macos-latest]
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -104,7 +112,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+        runner: [ubuntu-24.04, ubuntu-24.04-arm, macos-latest]
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
