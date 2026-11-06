@@ -4,6 +4,7 @@
   config,
   inputs,
   lib,
+  self,
   ...
 }:
 {
@@ -31,9 +32,15 @@
   # `nix run github:nix-purifiers/cargo-purifier -- <command>` runs the
   # `cargo-purifier` command: lock, prefetch or publish.
   perSystem =
-    { config, ... }:
+    { config, pkgs, ... }:
     {
       packages.default = config.packages.cargo-purifier;
+      packages.current-stable =
+        (import ../../../nix/lib/current-stable-scope.nix {
+          inherit pkgs;
+          overlay = self.overlays.default;
+          rustOverlaySource = closure-inputs.rust-overlay;
+        }).scope.cargo-purifier;
     };
 
   partitionedAttrs.checks = "checks";
