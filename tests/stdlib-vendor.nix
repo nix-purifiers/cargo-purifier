@@ -8,18 +8,7 @@ let
     printf '[workspace]\nmembers=["std"]\nresolver="2"\n' > Cargo.toml
     printf '[package]\nname="std-fixture"\nversion="0.0.0"\nedition="2021"\n[dependencies]\nitoa="=1.0.0"\n' > std/Cargo.toml
     touch std/src/lib.rs
-    cat > Cargo.lock <<'EOF'
-    version = 4
-    [[package]]
-    name = "std-fixture"
-    version = "0.0.0"
-    dependencies = ["itoa"]
-    [[package]]
-    name = "itoa"
-    version = "1.0.0"
-    source = "registry+https://github.com/rust-lang/crates.io-index"
-    checksum = "d2f3e61cf687687b30c9e6ddf0fc36cf15f035e66d491e6da968fa49ffa9a378"
-    EOF
+    cp ${./fixtures/stdlib-vendor/Cargo.lock} Cargo.lock
   '';
   rustc = pkgs.writeShellScript "fixture-rustc" ''
     if [ "$#" = 2 ] && [ "$1" = --print ] && [ "$2" = sysroot ]; then
@@ -33,7 +22,7 @@ let
     system = pkgs.stdenv.hostPlatform.system;
     src = ./fixtures/workspace;
     lockFile = ./fixtures/workspace/cargo-purifier.lock.json;
-    stdlibLock = "${sdkSource}/lib/rustlib/src/rust/library/Cargo.lock";
+    stdlibLock = ./fixtures/stdlib-vendor/Cargo.lock;
   };
 in
 pkgs.runCommand "cargo-stdlib-vendor"

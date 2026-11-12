@@ -1,0 +1,10 @@
+version = 4
+[[package]]
+name = "std-fixture"
+version = "0.0.0"
+dependencies = ["itoa"]
+[[package]]
+name = "itoa"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d2f3e61cf687687b30c9e6ddf0fc36cf15f035e66d491e6da968fa49ffa9a378"
