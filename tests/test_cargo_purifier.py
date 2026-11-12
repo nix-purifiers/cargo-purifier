@@ -520,6 +520,7 @@ class WritableVendor(unittest.TestCase):
                                     if path.endswith("/diagnostic-dependency-1.0.0/src/lib.rs")]
             self.assertTrue(dependency_locations, result.stderr)
             for path in dependency_locations:
+                self.assertFalse(Path(path).is_relative_to(root))
                 self.assertRegex(path, r"/registry/src/[^/]+-[0-9a-f]{16}/diagnostic-dependency-1\.0\.0/src/lib\.rs$")
 
     def test_generated_files_do_not_modify_store_sources(self):
