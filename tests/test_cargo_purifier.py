@@ -7,6 +7,7 @@ import contextlib
 import io
 import json
 import os
+import subprocess
 import tarfile
 import tempfile
 import unittest
@@ -549,6 +550,21 @@ class InheritedCargoHome(unittest.TestCase):
 
 
 class StandardLibraryVendor(unittest.TestCase):
+    def test_sdk_lock_path_is_data_at_the_nix_boundary(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            lock = root / 'SDK "quoted" ${not_a_variable}' / 'Cargo.lock'
+            lock.parent.mkdir()
+            lock.write_text('literal SDK lock contents\n')
+            with mock.patch.object(cargo_purify, 'stdlib_lock', return_value=lock):
+                arguments = cargo_purify.stdlib_vendor_args()
+            result = subprocess.run(
+                ['nix-instantiate', '--store', 'dummy://', '--eval', '--strict', '--json',
+                 '--expr', 'stdlibLock: builtins.readFile stdlibLock', *arguments],
+                check=True, text=True, capture_output=True,
+                env=dict(os.environ, XDG_CACHE_HOME=str(root / 'cache')))
+            self.assertEqual(json.loads(result.stdout), lock.read_text())
+
     def test_invalid_explicit_rustc_does_not_fall_back_to_path(self):
         with tempfile.TemporaryDirectory() as temporary:
             missing = str(Path(temporary) / 'missing-rustc')

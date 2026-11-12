@@ -453,7 +453,12 @@ realWorld
   # The parsing, URL, lockfile and publish logic of `cargo-purifier`.
   unit =
     pkgs.runCommand "unit"
-      { nativeBuildInputs = [ (pkgs.python3.withPackages (python: [ python.tomlkit ])) ]; }
+      {
+        nativeBuildInputs = [
+          pkgs.nix
+          (pkgs.python3.withPackages (python: [ python.tomlkit ]))
+        ];
+      }
       ''
         cp ${./test_cargo_purifier.py} test_cargo_purifier.py
         PYTHONPATH=${../pkgs/cargo-purifier} python3 -m unittest -v test_cargo_purifier
