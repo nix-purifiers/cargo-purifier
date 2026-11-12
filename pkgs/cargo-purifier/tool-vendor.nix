@@ -65,7 +65,9 @@ let
           repositoryTools
           ;
       };
-  stdlib = pkgs.rustPlatform.importCargoLock { lockFile = stdlibLock; };
+  stdlib = pkgs.rustPlatform.importCargoLock {
+    lockFile = if builtins.isPath stdlibLock then stdlibLock else /. + stdlibLock;
+  };
 in
 if stdlibLock == null then
   projectVendor

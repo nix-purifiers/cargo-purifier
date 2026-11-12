@@ -691,7 +691,7 @@ def stdlib_lock(arguments=()):
 
 def stdlib_vendor_args(arguments=()):
     lock = stdlib_lock(arguments)
-    return ['--arg', 'stdlibLock', path_arg(lock)] if lock else []
+    return ['--argstr', 'stdlibLock', str(lock)] if lock else []
 
 
 def stdlib_metadata(subcommand, arguments):

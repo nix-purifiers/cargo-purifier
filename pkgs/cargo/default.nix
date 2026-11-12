@@ -156,7 +156,7 @@ writeShellApplication {
     stdlib_args=()
     stdlib_lock=$(${lib.getExe command} _stdlib-lock "$@")
     if [ -n "$stdlib_lock" ]; then
-      stdlib_args=(--arg stdlibLock "/. + \"$stdlib_lock\"")
+      stdlib_args=(--argstr stdlibLock "$stdlib_lock")
     fi
     stamp=$(${lib.getExe command} _vendor-stamp "$root/Cargo.lock" "$lock" "$@")
     if [ -e "$state/vendor" ] && [ "$(cat "$state/stamp" 2>/dev/null)" = "$stamp" ]; then
