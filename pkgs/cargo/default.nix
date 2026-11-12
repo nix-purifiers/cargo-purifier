@@ -33,6 +33,14 @@
   command,
 }:
 let
+  runtimeSource = lib.fileset.toSource {
+    root = ../..;
+    fileset = lib.fileset.unions [
+      ../../lib-overlays/default
+      ../build-cargo-project
+      ../cargo-purifier
+    ];
+  };
   inherit (pkgs) cargo rustc;
 in
 writeShellApplication {
@@ -119,7 +127,7 @@ writeShellApplication {
     stamp=$(cat "$lock" "$root/Cargo.lock" | sha256sum)
     if [ -e "$state/vendor" ] && [ "$(cat "$state/stamp" 2>/dev/null)" = "$stamp" ]; then
       vendor=$(readlink -f "$state/vendor")
-    elif vendor=$(nix-build ${../../nix/lib}/tool-vendor.nix \
+    elif vendor=$(nix-build ${runtimeSource}/pkgs/cargo-purifier/tool-vendor.nix \
       --arg nixpkgs ${path} \
       --argstr system ${stdenv.hostPlatform.system} \
       --arg src "/. + \"$root\"" \

@@ -20,7 +20,7 @@ let
 
   project = buildCargoProject { inherit src lockFile; };
 
-  vendor = import ../../nix/lib/tool-vendor.nix {
+  vendor = import ../../pkgs/cargo-purifier/tool-vendor.nix {
     nixpkgs = pkgs.path;
     inherit (pkgs.stdenv.hostPlatform) system;
     inherit src;

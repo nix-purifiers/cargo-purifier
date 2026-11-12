@@ -20,6 +20,14 @@
   cacert,
 }:
 let
+  runtimeSource = lib.fileset.toSource {
+    root = ../..;
+    fileset = lib.fileset.unions [
+      ../../lib-overlays/default
+      ../build-cargo-project
+      ../cargo-purifier
+    ];
+  };
   inherit (pkgs) cargo;
   python = python3.withPackages (packages: [ packages.tomlkit ]);
 in
@@ -50,7 +58,7 @@ stdenvNoCC.mkDerivation {
           pkgs.rustc
         ]
       } \
-      --set CARGO_PURIFIER_NIX_LIB ${../../nix/lib} \
+      --set CARGO_PURIFIER_NIX_LIB ${runtimeSource}/pkgs/cargo-purifier \
       --set CARGO_PURIFIER_NIXPKGS ${path} \
       --set CARGO_PURIFIER_SYSTEM ${stdenv.hostPlatform.system} \
       --set-default SSL_CERT_FILE ${cacert}/etc/ssl/certs/ca-bundle.crt

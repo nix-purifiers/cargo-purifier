@@ -21,7 +21,7 @@ let
     inherit (pkgs) lib;
     inherit src lockFile cargoLock;
   };
-  base = import ./vendor.nix {
+  base = import ../build-cargo-project/vendor.nix {
     inherit (pkgs)
       lib
       rustPlatform
@@ -50,7 +50,7 @@ in
 if dependencies == [ ] then
   base
 else
-  import ./vendor-inputs.nix {
+  import ../build-cargo-project/vendor-inputs.nix {
     inherit (pkgs)
       lib
       runCommand
