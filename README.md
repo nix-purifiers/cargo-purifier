@@ -252,6 +252,9 @@ SDK discovery follows `RUSTC`, then native Cargo's `build.rustc` configuration
 Prefetch with the compiler selection intended for the build. Changing the SDK
 lock invalidates the prepared sources; SDK installation remains with the
 caller's toolchain manager.
+For Cargo without configuration-inspection support, set `RUSTC` explicitly
+when preparing standard-library dependencies; ordinary Cargo use keeps its
+native compiler selection.
 
 ### One-off builds without a project Nix file
 

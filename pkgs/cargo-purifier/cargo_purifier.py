@@ -660,6 +660,11 @@ def selected_rustc(arguments):
         text=True, capture_output=True,
         env=dict(os.environ, CARGO_PURIFIER='0', RUSTC_BOOTSTRAP='1'), timeout=30)
     if result.returncode:
+        if 'config' in result.stderr and ('no such subcommand' in result.stderr
+                                         or 'no such command' in result.stderr):
+            # SDK dependency capture is optional. Older Cargo still selects
+            # its compiler natively; RUSTC can identify it explicitly here.
+            return None
         if 'build.rustc' in result.stderr and 'is not set' in result.stderr:
             return shutil.which('rustc')
         raise Failure('Cargo could not resolve build.rustc: ' + result.stderr.strip())
