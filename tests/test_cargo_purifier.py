@@ -560,9 +560,10 @@ class StandardLibraryVendor(unittest.TestCase):
                 arguments = cargo_purify.stdlib_vendor_args()
             result = subprocess.run(
                 ['nix-instantiate', '--store', 'dummy://', '--eval', '--strict', '--json',
-                 '--expr', 'stdlibLock: builtins.readFile stdlibLock', *arguments],
-                check=True, text=True, capture_output=True,
+                 '--expr', '{ stdlibLock }: builtins.readFile stdlibLock', *arguments],
+                text=True, capture_output=True,
                 env=dict(os.environ, XDG_CACHE_HOME=str(root / 'cache')))
+            self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(json.loads(result.stdout), lock.read_text())
 
     def test_invalid_explicit_rustc_does_not_fall_back_to_path(self):
