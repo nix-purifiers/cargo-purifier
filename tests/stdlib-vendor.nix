@@ -6,14 +6,14 @@ let
     mkdir -p "$out/lib/rustlib/src/rust/library/std/src"
     cd "$out/lib/rustlib/src/rust/library"
     printf '[workspace]\nmembers=["std"]\nresolver="2"\n' > Cargo.toml
-    printf '[package]\nname="std-fixture"\nversion="0.0.0"\nedition="2021"\n[dependencies]\nitoa="=1.0.0"\n' > std/Cargo.toml
+    printf '[package]\nname="std-fixture"\nversion="0.0.0"\nedition="2021"\n[dependencies]\nitoa="=1.0.0"\nitoa-new={package="itoa",version="=1.0.18"}\n' > std/Cargo.toml
     touch std/src/lib.rs
     cat > Cargo.lock <<'EOF'
     version = 4
     [[package]]
     name = "std-fixture"
     version = "0.0.0"
-    dependencies = ["itoa 1.0.0"]
+    dependencies = ["itoa 1.0.0", "itoa 1.0.18"]
     [[package]]
     name = "itoa"
     version = "1.0.0"
@@ -69,7 +69,7 @@ pkgs.runCommand "cargo-stdlib-vendor"
     project = json.loads((root / 'project.json').read_text())
     sdk = json.loads((root / 'sdk.json').read_text())
     assert {p['version'] for p in project['packages'] if p['name'] == 'itoa'} == {'1.0.18'}
-    assert {p['version'] for p in sdk['packages'] if p['name'] == 'itoa'} == {'1.0.0'}
+    assert {p['version'] for p in sdk['packages'] if p['name'] == 'itoa'} == {'1.0.0', '1.0.18'}
     assert all('/vendor-worktrees/' in p['manifest_path'] for p in sdk['packages'] if p['source'])
     PY
     cmp Cargo.lock "$TMPDIR/project.lock"
