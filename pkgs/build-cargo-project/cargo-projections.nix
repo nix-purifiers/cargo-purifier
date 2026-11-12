@@ -13,6 +13,7 @@
   cargoLock,
   entries,
   repositoryTools ? ../../tools,
+  publicationSourceArchives ? [ ],
   name ? "cargo-repository",
 }:
 let
@@ -32,6 +33,7 @@ let
   } "touch $out";
   identity = runCommand "cargo-repository-identity" {
     source = src;
+    publicationSources = builtins.toJSON publicationSourceArchives;
     inherit vendor;
     inherit
       projector
@@ -58,6 +60,7 @@ let
             workspace
             vendor
             cargoLock
+            publicationSourceArchives
             ;
           sourceIdentity = (purifier.inputIdentity src).hash;
           projectorIdentity = (purifier.inputIdentity toolchain).hash;

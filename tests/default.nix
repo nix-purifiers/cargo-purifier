@@ -194,6 +194,8 @@ realWorld
         export CARGO_PURIFIER_TEST_TOOLS=${../tools}
         ${(pkgs.python3.withPackages (python: [ python.tomlkit ]))}/bin/python3 \
           ${./test_cargo_repository.py}
+        ${(pkgs.python3.withPackages (python: [ python.tomlkit ]))}/bin/python3 \
+          ${./test_cargo_publication.py}
         touch "$out"
       '';
 

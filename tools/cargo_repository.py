@@ -15,6 +15,7 @@ import tempfile
 import tomllib
 
 import tomlkit
+import cargo_publication
 
 from cargo_graph import VersionSelector, digest, graph_versions
 
@@ -250,8 +251,10 @@ def project(request, out, catalog_path, cargo):
         manifests = [*source.rglob('Cargo.toml')]
         manifests += [directory / 'Cargo.toml' for directory in combined.iterdir()
                       if directory.name.startswith('original-')]
+        publication_adjustments = cargo_publication.prepare(manifests, request.get('publicationSourceArchives', []))
         for manifest in manifests:
             document = tomlkit.parse(manifest.read_text())
+            cargo_publication.omit(document, manifest, publication_adjustments)
             bind_supplied(document, candidates, selector)
             write_document(manifest, document)
         def native(*arguments, cwd=root):
@@ -346,6 +349,9 @@ def project(request, out, catalog_path, cargo):
             extract_crate(data, sources, name, version)
             packages[(name, version)] = {'name': name, 'version': version, 'sourceVersion': package['version'],
                                          'archive': archive, 'checksum': checksum}
+            adjustment = publication_adjustments.get(Path(package['manifest_path']))
+            if adjustment is not None:
+                packages[(name, version)]['publicationMetadataAdjustment'] = adjustment
             records[(name, version)] = index_record(crate_manifest(data), checksum,
                                                    {(item['name'], versions[identifier]) for identifier, item in infos.items()})
         roots = [{'name': infos[key]['name'], 'version': versions[key]} for key in metadata['workspace_members']]
