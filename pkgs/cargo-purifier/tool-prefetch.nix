@@ -16,6 +16,7 @@
   src,
   lockFile,
   cargoLock ? src + "/Cargo.lock",
+  stdlibLock ? null,
   # The cargo-purifier package that runs the prefetch, or null when the
   # command runs outside it.
   tools,
@@ -31,6 +32,7 @@ let
       src
       lockFile
       cargoLock
+      stdlibLock
       sharedSource
       repositoryTools
       ;

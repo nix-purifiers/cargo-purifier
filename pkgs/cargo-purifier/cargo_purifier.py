@@ -625,10 +625,48 @@ def tools_arg():
     return f"builtins.storePath {json.dumps(tools)}" if tools else "null"
 
 
+def stdlib_lock():
+    """The caller-selected SDK's standard-library dependency lock, if installed."""
+    rustc = os.environ.get('RUSTC') or shutil.which('rustc')
+    if not rustc:
+        return None
+    result = subprocess.run([rustc, '--print', 'sysroot'], text=True, capture_output=True,
+                            env=dict(os.environ, CARGO_PURIFIER='0'), timeout=30)
+    if result.returncode:
+        raise Failure('the selected rustc could not report its sysroot: ' + result.stderr.strip())
+    lock = Path(result.stdout.strip()) / 'lib/rustlib/src/rust/library/Cargo.lock'
+    return lock if lock.is_file() else None
+
+
+def stdlib_vendor_args():
+    lock = stdlib_lock()
+    return ['--arg', 'stdlibLock', path_arg(lock)] if lock else []
+
+
+def stdlib_metadata(subcommand, arguments):
+    if subcommand != 'metadata':
+        return False
+    lock = stdlib_lock()
+    if lock is None:
+        return False
+    manifest = None
+    for index, argument in enumerate(arguments):
+        if argument == '--':
+            break
+        if argument == '--manifest-path' and index + 1 < len(arguments):
+            manifest = Path(arguments[index + 1])
+        elif argument.startswith('--manifest-path='):
+            manifest = Path(argument.split('=', 1)[1])
+    return manifest is not None and manifest.resolve() == (lock.parent / 'Cargo.toml').resolve()
+
+
 def vendor_stamp(cargo_lock, lock_path):
     """Cache identity of the lockfiles and the selected vendoring implementation."""
     implementation = os.environ.get("CARGO_PURIFIER_NIX_LIB", "").encode()
     data = implementation + b"\0" + lock_path.read_bytes() + cargo_lock.read_bytes()
+    sdk_lock = stdlib_lock()
+    if sdk_lock:
+        data += b'\0stdlib\0' + str(sdk_lock).encode() + b'\0' + sdk_lock.read_bytes()
     return hashlib.sha256(data).hexdigest() + "  -"
 
 def copy_vendor_tree(source, destination, source_root=None, destination_root=None):
@@ -837,6 +875,7 @@ def prefetch(options):
         "--arg", "lockFile", path_arg(lock_path),
         "--arg", "cargoLock", path_arg(cargo_lock),
         "--arg", "tools", tools_arg(),
+        *stdlib_vendor_args(),
         "--out-link", str(state / "prefetch"),
     ))
     # The cargo wrapper reads the vendored sources from these two files
@@ -1053,6 +1092,7 @@ def native_command(options):
             "tool-vendor.nix", "--arg", "src", path_arg(root),
             "--arg", "lockFile", path_arg(lock_path),
             "--arg", "cargoLock", path_arg(cargo_lock),
+            *stdlib_vendor_args(),
             "--out-link", str(directory / "vendor")))
         vendor = writable_vendor(directory, vendor)
         configuration = directory / "config.toml"
@@ -1082,6 +1122,12 @@ def main(argv):
     args = argv[1:]
     if args[:1] == ["_runtime-metadata"] and len(args) >= 2:
         raise SystemExit(0 if runtime_metadata(args[1], args[2:]) else 1)
+    if args[:1] == ["_stdlib-metadata"] and len(args) >= 2:
+        raise SystemExit(0 if stdlib_metadata(args[1], args[2:]) else 1)
+    if args == ['_stdlib-lock']:
+        lock = stdlib_lock()
+        print(lock if lock else '')
+        return 0
     if args == ["_native-cargo"]:
         print(native_cargo())
         return 0

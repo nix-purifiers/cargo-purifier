@@ -548,5 +548,46 @@ class InheritedCargoHome(unittest.TestCase):
         self.assertEqual(changed['env']['ABSOLUTE']['value'], '/fixed')
 
 
+class StandardLibraryVendor(unittest.TestCase):
+    def test_sdk_queries_cannot_select_an_arbitrary_foreign_workspace(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            sdk = root / 'selected-sdk/library/Cargo.lock'
+            sdk.parent.mkdir(parents=True)
+            sdk.write_text('version = 4\n')
+            manifest = sdk.parent / 'Cargo.toml'
+            foreign = root / 'other-sdk/library/Cargo.toml'
+            with mock.patch.object(cargo_purify, 'stdlib_lock', return_value=sdk):
+                self.assertTrue(cargo_purify.stdlib_metadata('metadata',
+                                ['metadata', '--manifest-path', str(manifest)]))
+                self.assertTrue(cargo_purify.stdlib_metadata('metadata',
+                                ['metadata', '--manifest-path=' + str(manifest)]))
+                self.assertFalse(cargo_purify.stdlib_metadata('metadata',
+                                 ['metadata', '--manifest-path', str(foreign)]))
+                self.assertFalse(cargo_purify.stdlib_metadata('run',
+                                 ['run', '--', '--manifest-path', str(manifest)]))
+
+    def test_sdk_switch_and_dependency_change_invalidate_prepared_sources(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            native, lock = root / 'Cargo.lock', root / 'purifier.json'
+            native.write_text('project-native-lock')
+            lock.write_text('project-purifier-lock')
+            first, second = root / 'sdk-one.lock', root / 'sdk-two.lock'
+            first.write_text('sdk-lock')
+            second.write_text('sdk-lock')
+            with mock.patch.object(cargo_purify, 'stdlib_lock', return_value=None):
+                ordinary = cargo_purify.vendor_stamp(native, lock)
+            with mock.patch.object(cargo_purify, 'stdlib_lock', return_value=first):
+                prepared = cargo_purify.vendor_stamp(native, lock)
+                first.write_text('updated-sdk-lock')
+                changed = cargo_purify.vendor_stamp(native, lock)
+            with mock.patch.object(cargo_purify, 'stdlib_lock', return_value=second):
+                switched = cargo_purify.vendor_stamp(native, lock)
+            self.assertEqual(len({ordinary, prepared, changed, switched}), 4)
+            self.assertEqual(native.read_text(), 'project-native-lock')
+            self.assertEqual(lock.read_text(), 'project-purifier-lock')
+
+
 if __name__ == "__main__":
     unittest.main()

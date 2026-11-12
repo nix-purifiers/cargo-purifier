@@ -107,6 +107,11 @@ writeShellApplication {
         *) i=$((i + 1)) ;;
       esac
     done
+    # Bun and other build-std planners query the selected SDK's manifest
+    # from the project directory. It shares the prepared dependency union.
+    if ${lib.getExe command} _stdlib-metadata "$sub" "$@"; then
+      workspace_args=()
+    fi
     manifest=$(${lib.getExe command} _workspace-root "''${workspace_args[@]}" 2>/dev/null) || {
       echo "cargo-purifier: warning: no cargo-purifier.lock.json found; running cargo impurely. Run \`cargo-purifier lock\` to use Nix-resolved dependencies." >&2
       exec "$real" "$@"
@@ -148,6 +153,11 @@ writeShellApplication {
 
     state=$root/target/cargo-purifier
     mkdir -p "$state"
+    stdlib_args=()
+    stdlib_lock=$(${lib.getExe command} _stdlib-lock)
+    if [ -n "$stdlib_lock" ]; then
+      stdlib_args=(--arg stdlibLock "/. + \"$stdlib_lock\"")
+    fi
     stamp=$(${lib.getExe command} _vendor-stamp "$root/Cargo.lock" "$lock")
     if [ -e "$state/vendor" ] && [ "$(cat "$state/stamp" 2>/dev/null)" = "$stamp" ]; then
       vendor=$(readlink -f "$state/vendor")
@@ -156,6 +166,7 @@ writeShellApplication {
       --argstr system ${stdenv.hostPlatform.system} \
       --arg src "/. + \"$root\"" \
       --arg lockFile "/. + \"$lock\"" \
+      "''${stdlib_args[@]}" \
       --out-link "$state/vendor" 2>"$state/nix-build.log"); then
       printf '%s\n' "$stamp" >"$state/stamp"
     else
