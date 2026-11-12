@@ -359,6 +359,9 @@ lets diagnostic consumers recognize dependency source locations. The caller's
 Cargo home is left untouched. `cargo clean` keeps these source copies, as it
 does native Cargo's source cache; remove the purifier cache to discard files
 generated beside dependency sources.
+If the default home cache is not writable, the wrapper uses a private cache
+under the caller's temporary directory. An explicit `XDG_CACHE_HOME` is kept
+authoritative, including errors when it cannot be written.
 
 ## Editor
 

@@ -4,6 +4,7 @@ git dependencies are fetched from, cargo's configuration, and the publish
 request."""
 
 import contextlib
+import errno
 import io
 import json
 import os
@@ -424,6 +425,51 @@ class WritableVendor(unittest.TestCase):
         environment = mock.patch.dict(os.environ, XDG_CACHE_HOME=cache.name)
         environment.start()
         self.addCleanup(environment.stop)
+
+    def test_unwritable_default_cache_uses_private_temporary_storage(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            vendor = root / "vendor"
+            vendor.mkdir()
+            (vendor / "lib.rs").write_text("original")
+            (root / "tmp").mkdir()
+            home = root / "unwritable"
+            mkdir = Path.mkdir
+
+            def guarded_mkdir(path, *args, **kwargs):
+                if path.is_relative_to(home):
+                    raise PermissionError(errno.EACCES, "read-only home", str(path))
+                return mkdir(path, *args, **kwargs)
+
+            with mock.patch.dict(os.environ, HOME=str(home)):
+                os.environ.pop("XDG_CACHE_HOME", None)
+                with mock.patch.object(Path, "mkdir", guarded_mkdir), mock.patch(
+                    "tempfile.gettempdir", return_value=str(root / "tmp")
+                ):
+                    copied = cargo_purify.writable_vendor(root / "state", vendor)
+            self.assertTrue(copied.is_relative_to(root / "tmp"))
+            self.assertEqual((copied / "lib.rs").read_text(), "original")
+            private = root / "tmp" / f"cargo-purifier-{os.getuid()}"
+            self.assertEqual(private.stat().st_mode & 0o777, 0o700)
+
+    def test_unwritable_explicit_cache_is_not_redirected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            vendor = root / "vendor"
+            vendor.mkdir()
+            cache = root / "explicit-cache"
+            mkdir = Path.mkdir
+
+            def guarded_mkdir(path, *args, **kwargs):
+                if path.is_relative_to(cache):
+                    raise PermissionError(errno.EACCES, "read-only cache", str(path))
+                return mkdir(path, *args, **kwargs)
+
+            with mock.patch.dict(os.environ, XDG_CACHE_HOME=str(cache)), mock.patch.object(
+                Path, "mkdir", guarded_mkdir
+            ):
+                with self.assertRaises(PermissionError):
+                    cargo_purify.writable_vendor(root / "state", vendor)
 
     def test_projects_do_not_share_mutable_source_trees(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -24,6 +24,7 @@ cargo runs this command as `cargo purifier <command>` too.
 import argparse
 import base64
 import contextlib
+import errno
 import fcntl
 import hashlib
 import io
@@ -763,8 +764,25 @@ def writable_vendor(state, vendor):
     cache_home = os.environ.get("XDG_CACHE_HOME")
     cache = Path(cache_home) if cache_home else Path.home() / ".cache"
     project = hashlib.sha256(os.fsencode(state.resolve())).hexdigest()
-    copies = cache / "cargo-purifier" / "vendor-worktrees" / project / "registry" / "src"
-    copies.mkdir(mode=0o700, parents=True, exist_ok=True)
+    suffix = Path("vendor-worktrees") / project / "registry" / "src"
+    copies = cache / "cargo-purifier" / suffix
+    try:
+        copies.mkdir(mode=0o700, parents=True, exist_ok=True)
+    except OSError as error:
+        if cache_home or error.errno not in (errno.EACCES, errno.EPERM, errno.EROFS):
+            raise
+        # Sandboxed callers can supply a Cargo home while HOME is unwritable.
+        # Keep the implicit cache usable without modifying their Cargo home.
+        cache = Path(tempfile.gettempdir()) / f"cargo-purifier-{os.getuid()}"
+        try:
+            cache.mkdir(mode=0o700)
+        except FileExistsError:
+            pass
+        info = cache.lstat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) & 0o077:
+            raise Failure(f"temporary source cache is not private: {cache}")
+        copies = cache / suffix
+        copies.mkdir(mode=0o700, parents=True, exist_ok=True)
     destination = copies / f"cargo-purifier-{identity}-{identity[:16]}"
     with (state / "vendor-copy.lock").open("a") as guard:
         fcntl.flock(guard, fcntl.LOCK_EX)
