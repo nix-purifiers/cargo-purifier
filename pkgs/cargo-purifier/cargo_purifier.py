@@ -625,10 +625,58 @@ def tools_arg():
     return f"builtins.storePath {json.dumps(tools)}" if tools else "null"
 
 
-def stdlib_lock():
+def cargo_config_arguments(arguments):
+    result = []
+    index = 0
+    while index < len(arguments):
+        argument = arguments[index]
+        if argument == '--':
+            break
+        if argument in {'--config', '-Z'} and index + 1 < len(arguments):
+            result.extend(arguments[index:index + 2])
+            index += 2
+        else:
+            if argument.startswith(('--config=', '-Z')):
+                result.append(argument)
+            index += 1
+    return result
+
+
+def selected_rustc(arguments):
+    if 'RUSTC' in os.environ:
+        return os.environ['RUSTC']
+    try:
+        cargo = native_cargo()
+    except Failure:
+        if os.environ.get('CARGO_PURIFIER_REAL_CARGO') or os.environ.get('CARGO'):
+            raise
+        return shutil.which('rustc')
+    # Ask Cargo to merge its own files, includes, environment and CLI values.
+    # Bootstrap enables this read-only inspection on stable Cargo; it is never
+    # exported to the project's compiler or build command.
+    result = subprocess.run(
+        [cargo, *cargo_config_arguments(arguments), '-Zunstable-options', 'config', 'get',
+         'build.rustc', '--format', 'toml', '--show-origin', '--color', 'never'],
+        text=True, capture_output=True,
+        env=dict(os.environ, CARGO_PURIFIER='0', RUSTC_BOOTSTRAP='1'), timeout=30)
+    if result.returncode:
+        if 'build.rustc' in result.stderr and 'is not set' in result.stderr:
+            return shutil.which('rustc')
+        raise Failure('Cargo could not resolve build.rustc: ' + result.stderr.strip())
+    import tomlkit
+    value = tomlkit.parse(result.stdout)['build']['rustc']
+    program = str(value)
+    if '/' in program or (os.name == 'nt' and '\\' in program):
+        origin = value.trivia.comment.removeprefix('#').strip()
+        base = Path(origin).parent.parent if Path(origin).is_absolute() else Path.cwd()
+        program = str(base / program)
+    return program
+
+
+def stdlib_lock(arguments=()):
     """The caller-selected SDK's standard-library dependency lock, if installed."""
-    rustc = os.environ.get('RUSTC') or shutil.which('rustc')
-    if not rustc:
+    rustc = selected_rustc(arguments)
+    if rustc is None:
         return None
     result = subprocess.run([rustc, '--print', 'sysroot'], text=True, capture_output=True,
                             env=dict(os.environ, CARGO_PURIFIER='0'), timeout=30)
@@ -638,15 +686,15 @@ def stdlib_lock():
     return lock if lock.is_file() else None
 
 
-def stdlib_vendor_args():
-    lock = stdlib_lock()
+def stdlib_vendor_args(arguments=()):
+    lock = stdlib_lock(arguments)
     return ['--arg', 'stdlibLock', path_arg(lock)] if lock else []
 
 
 def stdlib_metadata(subcommand, arguments):
     if subcommand != 'metadata':
         return False
-    lock = stdlib_lock()
+    lock = stdlib_lock(arguments)
     if lock is None:
         return False
     manifest = None
@@ -660,11 +708,11 @@ def stdlib_metadata(subcommand, arguments):
     return manifest is not None and manifest.resolve() == (lock.parent / 'Cargo.toml').resolve()
 
 
-def vendor_stamp(cargo_lock, lock_path):
+def vendor_stamp(cargo_lock, lock_path, arguments=()):
     """Cache identity of the lockfiles and the selected vendoring implementation."""
     implementation = os.environ.get("CARGO_PURIFIER_NIX_LIB", "").encode()
     data = implementation + b"\0" + lock_path.read_bytes() + cargo_lock.read_bytes()
-    sdk_lock = stdlib_lock()
+    sdk_lock = stdlib_lock(arguments)
     if sdk_lock:
         data += b'\0stdlib\0' + str(sdk_lock).encode() + b'\0' + sdk_lock.read_bytes()
     return hashlib.sha256(data).hexdigest() + "  -"
@@ -1092,7 +1140,7 @@ def native_command(options):
             "tool-vendor.nix", "--arg", "src", path_arg(root),
             "--arg", "lockFile", path_arg(lock_path),
             "--arg", "cargoLock", path_arg(cargo_lock),
-            *stdlib_vendor_args(),
+            *stdlib_vendor_args(arguments),
             "--out-link", str(directory / "vendor")))
         vendor = writable_vendor(directory, vendor)
         configuration = directory / "config.toml"
@@ -1124,8 +1172,8 @@ def main(argv):
         raise SystemExit(0 if runtime_metadata(args[1], args[2:]) else 1)
     if args[:1] == ["_stdlib-metadata"] and len(args) >= 2:
         raise SystemExit(0 if stdlib_metadata(args[1], args[2:]) else 1)
-    if args == ['_stdlib-lock']:
-        sdk_lock = stdlib_lock()
+    if args[:1] == ['_stdlib-lock']:
+        sdk_lock = stdlib_lock(args[1:])
         print(sdk_lock if sdk_lock else '')
         return 0
     if args == ["_native-cargo"]:
@@ -1136,9 +1184,9 @@ def main(argv):
         print(manifest)
         return 0
     if args and args[0] == "_vendor-stamp":
-        if len(args) != 3:
+        if len(args) < 3:
             raise Failure("_vendor-stamp needs Cargo.lock and purifier lock paths")
-        print(vendor_stamp(Path(args[1]), Path(args[2])))
+        print(vendor_stamp(Path(args[1]), Path(args[2]), args[3:]))
         return 0
     if args and args[0] == "_writable-vendor":
         if len(args) != 3:

@@ -58,6 +58,19 @@ pkgs.runCommand "cargo-stdlib-vendor"
     cargo metadata --offline --locked --format-version 1 > "$TMPDIR/project.json"
     cargo metadata --manifest-path ${sdkSource}/lib/rustlib/src/rust/library/Cargo.toml \
       --offline --locked --format-version 1 > "$TMPDIR/sdk.json"
+    unset RUSTC
+    mkdir -p .cargo
+    printf '[build]\nrustc="%s"\n' ${rustc} > .cargo/config.toml
+    cargo-purifier _vendor-stamp Cargo.lock cargo-purifier.lock.json > "$TMPDIR/config-stamp"
+    cmp target/cargo-purifier/stamp "$TMPDIR/config-stamp"
+    cargo metadata --manifest-path ${sdkSource}/lib/rustlib/src/rust/library/Cargo.toml \
+      --offline --locked --format-version 1 > "$TMPDIR/config-sdk.json"
+    CARGO_BUILD_RUSTC=${rustc} cargo metadata \
+      --manifest-path ${sdkSource}/lib/rustlib/src/rust/library/Cargo.toml \
+      --offline --locked --format-version 1 > "$TMPDIR/env-sdk.json"
+    cargo --config 'build.rustc="${rustc}"' metadata \
+      --manifest-path ${sdkSource}/lib/rustlib/src/rust/library/Cargo.toml \
+      --offline --locked --format-version 1 > "$TMPDIR/cli-sdk.json"
     python3 - "$TMPDIR" <<'PY'
     import json, pathlib, sys
     root = pathlib.Path(sys.argv[1])
@@ -66,6 +79,8 @@ pkgs.runCommand "cargo-stdlib-vendor"
     assert {p['version'] for p in project['packages'] if p['name'] == 'itoa'} == {'1.0.18'}
     assert {p['version'] for p in sdk['packages'] if p['name'] == 'itoa'} == {'1.0.0'}
     assert all('/vendor-worktrees/' in p['manifest_path'] for p in sdk['packages'] if p['source'])
+    for name in ('config-sdk', 'env-sdk', 'cli-sdk'):
+        assert json.loads((root / (name + '.json')).read_text()) == sdk
     PY
     cmp Cargo.lock "$TMPDIR/project.lock"
     test ! -e "$CARGO_HOME/registry/src"
