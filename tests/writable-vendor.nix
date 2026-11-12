@@ -37,6 +37,7 @@ pkgs.runCommand "cargo-writable-vendor"
     chmod -R u+w project
     cd project
     export CARGO_HOME="$TMPDIR/caller/.cargo"
+    export XDG_CACHE_HOME="$TMPDIR/cache"
     mkdir -p "$CARGO_HOME"
     mkdir -p "$TMPDIR/caller/config-input"
     echo original > "$TMPDIR/caller/config-input/sentinel"
@@ -61,7 +62,7 @@ pkgs.runCommand "cargo-writable-vendor"
     cargo test --offline
     cmp "$TMPDIR/original-config" "$CARGO_HOME/config"
     test ! -e ${vendor}/source-generator-1.0.0/generated
-    find target/cargo-purifier/vendor-worktrees -name permissions.toml | grep .
+    find "$XDG_CACHE_HOME/cargo-purifier/vendor-worktrees" -name permissions.toml | grep .
     # A second command reuses the local source copy and its generated files.
     cargo test --offline
     test ! -e ${vendor}/source-generator-1.0.0/generated
