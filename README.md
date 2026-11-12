@@ -242,6 +242,17 @@ of the scope on the `PATH`, for example in a development shell as
 cargo-purifier prefetch
 ```
 
+When the selected compiler has `rust-src` installed, prefetch also prepares
+the dependencies in that component's standard-library `Cargo.lock`. Builds
+using `-Zbuild-std` can then resolve those crates offline alongside the
+project's dependencies. The SDK lock stays separate from the project's locks.
+
+SDK discovery follows `RUSTC`, then native Cargo's `build.rustc` configuration
+(including `CARGO_BUILD_RUSTC` and CLI config overrides), then `rustc` on PATH.
+Prefetch with the compiler selection intended for the build. Changing the SDK
+lock invalidates the prepared sources; SDK installation remains with the
+caller's toolchain manager.
+
 ### One-off builds without a project Nix file
 
 For an ad hoc build, the builder can also be evaluated directly from the
