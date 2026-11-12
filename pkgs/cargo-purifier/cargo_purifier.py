@@ -24,11 +24,14 @@ cargo runs this command as `cargo purifier <command>` too.
 import argparse
 import base64
 import contextlib
+import fcntl
 import hashlib
 import io
 import json
 import os
 import re
+import shutil
+import stat
 import subprocess
 import sys
 import tarfile
@@ -52,12 +55,81 @@ class Failure(Exception):
     pass
 
 
+def native_cargo():
+    """Find the project's Cargo without following rustup's argv0-sensitive proxy.
+
+    The marker also excludes another installed purifier wrapper on PATH. An
+    explicit selection is validated rather than silently replaced.
+    """
+    explicit = os.environ.get("CARGO_PURIFIER_REAL_CARGO")
+    candidates = ([explicit] if explicit else
+                  ([os.environ['CARGO']] if os.environ.get('CARGO') else []) +
+                  [str(Path(directory or '.') / 'cargo')
+                   for directory in os.get_exec_path()])
+    for candidate in candidates:
+        path = Path(os.path.abspath(candidate))
+        if not path.is_file() or not os.access(path, os.X_OK):
+            continue
+        with path.open('rb') as stream:
+            header = stream.read(65536)
+        if (b'cargo-purifier native-cargo wrapper' in header or
+                (header.startswith(b'#!') and b'CARGO_PURIFIER_LOCKFILE' in header)):
+            if explicit:
+                raise Failure('CARGO_PURIFIER_REAL_CARGO points to a purifier wrapper')
+            continue
+        # Pin rustup's selection in the original invocation directory before
+        # manifest discovery or project-input capture changes child cwd/home.
+        # Keep the proxy pathname itself: resolving its symlink to rustup would
+        # change argv0 and invoke rustup's CLI instead of Cargo.
+        rustup = path.parent / 'rustup'
+        if path.resolve().name == 'rustup':
+            rustup = path.resolve()
+        if ('RUSTUP_TOOLCHAIN' not in os.environ and rustup.is_file()
+                and os.path.samefile(path, rustup)):
+            active = subprocess.run([str(rustup), 'show', 'active-toolchain'],
+                                    check=True, text=True, capture_output=True)
+            selection = active.stdout.split()
+            if not selection:
+                raise Failure('rustup did not report an active project toolchain')
+            os.environ['RUSTUP_TOOLCHAIN'] = selection[0]
+        return str(path)
+    if explicit:
+        raise Failure('CARGO_PURIFIER_REAL_CARGO is not an executable Cargo path')
+    raise Failure('no installed Cargo found on PATH; provide your project runtime or '
+                  'set CARGO_PURIFIER_REAL_CARGO to its executable')
+
+
 def run(command, capture=True, cwd=None):
+    if command[0] == "cargo":
+        cargo = native_cargo()
+        config = os.environ.get("CARGO_PURIFIER_CAPTURE_CONFIG")
+        command = [cargo, *(["--config", config] if config else []), *command[1:]]
     environment = dict(os.environ, CARGO_PURIFIER="0")
-    if command[0] == "cargo" and environment.get("CARGO_PURIFIER_CAPTURE_CONFIG"):
-        command = [command[0], "--config", environment["CARGO_PURIFIER_CAPTURE_CONFIG"], *command[1:]]
     result = subprocess.run(command, check=True, text=True, capture_output=capture, cwd=cwd, env=environment)
     return result.stdout if capture else None
+
+
+def runtime_metadata(subcommand, arguments):
+    """Recognize Cargo's redirected SDK-source graph, separate from a project.
+
+    Rust-analyzer supplies the SDK sysroot as RUSTUP_TOOLCHAIN and redirects
+    its standard-library lockfile to a temporary Cargo.lock. A project's
+    external purifier lock must not turn that SDK query into a project build.
+    """
+    sdk = os.environ.get('RUSTUP_TOOLCHAIN', '')
+    if (subcommand != 'metadata' or not sdk or not Path(sdk).is_absolute()
+            or not os.environ.get('CARGO_RESOLVER_LOCKFILE_PATH')):
+        return False
+    manifest = Path.cwd() / 'Cargo.toml'
+    for index, argument in enumerate(arguments):
+        if argument == '--manifest-path' and index + 1 < len(arguments):
+            manifest = Path(arguments[index + 1])
+        elif argument.startswith('--manifest-path='):
+            manifest = Path(argument.split('=', 1)[1])
+    sources = [Path(sdk) / 'lib/rustlib/src/rust/library']
+    if os.environ.get('RUST_SRC_PATH'):
+        sources.append(Path(os.environ['RUST_SRC_PATH']))
+    return any(manifest.resolve() == (source / 'Cargo.toml').resolve() for source in sources)
 
 
 def sri_sha256(data):
@@ -307,7 +379,7 @@ def lock(options):
     previous = previous_lock(lock_path)
     state = input_state(options, root, previous)
     configuration = CargoConfig(root)
-    cargo = os.environ.get("CARGO_PURIFIER_REAL_CARGO", "cargo")
+    cargo = native_cargo()
     original_home = cargo_home()
     context = (input_adapter().native_capture(root, state, configuration, cargo, original_home)
                if state is not None else contextlib.nullcontext(None))
@@ -420,7 +492,7 @@ def update(options):
     options.refresh_inputs = True
     state = input_state(options, root, previous_lock(lock_path_of(options, root)))
     options._input_state = state
-    cargo = os.environ.get("CARGO_PURIFIER_REAL_CARGO", "cargo")
+    cargo = native_cargo()
     context = (input_adapter().native_capture(root, state, CargoConfig(root), cargo, cargo_home())
                if state is not None else contextlib.nullcontext(None))
     with cargo_lock_in_tree(root, cargo_lock_of(options, root)), context:
@@ -554,10 +626,201 @@ def tools_arg():
 
 
 def vendor_stamp(cargo_lock, lock_path):
-    """What the cargo wrapper records for the lockfiles it built the
-    vendored sources from: the output of `cat <lockfiles> | sha256sum`."""
-    data = lock_path.read_bytes() + cargo_lock.read_bytes()
+    """Cache identity of the lockfiles and the selected vendoring implementation."""
+    implementation = os.environ.get("CARGO_PURIFIER_NIX_LIB", "").encode()
+    data = implementation + b"\0" + lock_path.read_bytes() + cargo_lock.read_bytes()
     return hashlib.sha256(data).hexdigest() + "  -"
+
+def copy_vendor_tree(source, destination, source_root=None, destination_root=None):
+    """Preserve in-tree aliases, materialize links to external immutable inputs."""
+    source_root = source if source_root is None else source_root
+    destination_root = destination if destination_root is None else destination_root
+    if source.is_symlink():
+        target = Path(os.path.abspath(source.parent / os.readlink(source)))
+        if target.is_relative_to(source_root):
+            relocated = destination_root / target.relative_to(source_root)
+            destination.symlink_to(os.path.relpath(relocated, destination.parent))
+            return
+        source = source.resolve()
+        source_root, destination_root = source, destination
+    if source.is_dir():
+        destination.mkdir()
+        for child in source.iterdir():
+            copy_vendor_tree(child, destination / child.name, source_root, destination_root)
+        shutil.copystat(source, destination)
+    else:
+        shutil.copy2(source, destination)
+
+
+def writable_vendor(state, vendor):
+    """Materialize immutable Nix sources for build scripts generating adjacent files.
+
+    Keep the store output as the GC root and identity of the locked sources.
+    A private, atomic copy per output lets native Cargo build scripts write just
+    as they do in CARGO_HOME, without following symlinks back into the store.
+    """
+    state = Path(state)
+    vendor = Path(vendor).resolve()
+    state.mkdir(parents=True, exist_ok=True)
+    identity = hashlib.sha256(os.fsencode(vendor)).hexdigest()
+    copies = state / "vendor-worktrees"
+    copies.mkdir(exist_ok=True)
+    destination = copies / identity
+    with (state / "vendor-copy.lock").open("a") as guard:
+        fcntl.flock(guard, fcntl.LOCK_EX)
+        if destination.is_dir():
+            return destination
+        with tempfile.TemporaryDirectory(prefix=".copy-", dir=copies) as temporary:
+            staged = Path(temporary) / "vendor"
+            copy_vendor_tree(vendor, staged)
+            for directory, directories, files in os.walk(staged):
+                for path in [Path(directory), *(Path(directory) / name for name in files)]:
+                    if not path.is_symlink():
+                        path.chmod(stat.S_IMODE(path.stat().st_mode) | stat.S_IWUSR)
+            staged.rename(destination)
+    return destination
+
+
+def rebase_home_config(data, path):
+    """Keep Cargo's config-relative paths when copying a global configuration.
+
+    Cargo resolves ordinary paths two directories above the defining file;
+    include paths instead use the file's own directory. Do not introduce config
+    includes: the caller's existing Cargo may predate that feature.
+    """
+    base = path.parent.parent
+
+    def absolute(value, executable=False, directory=base):
+        if not isinstance(value, str) or not value or value.startswith('{'):
+            return value
+        if executable and '/' not in value and '\\' not in value:
+            return value
+        return str(directory / value)
+
+    def command(value):
+        if isinstance(value, list):
+            return [absolute(value[0], True), *value[1:]] if value else value
+        if isinstance(value, str):
+            words = value.split(None, 1)
+            if words:
+                return absolute(words[0], True) + (' ' + words[1] if len(words) > 1 else '')
+        return value
+
+    for key in ('rustc', 'rustc-wrapper', 'rustc-workspace-wrapper', 'rustdoc'):
+        if key in data.get('build', {}):
+            data['build'][key] = absolute(data['build'][key], True)
+    for key in ('target-dir', 'build-dir', 'dep-info-basedir', 'out-dir'):
+        if key in data.get('build', {}):
+            data['build'][key] = absolute(data['build'][key])
+    if 'target' in data.get('build', {}):
+        def target_path(value):
+            return absolute(value) if isinstance(value, str) and value.endswith('.json') else value
+        target = data['build']['target']
+        data['build']['target'] = [target_path(value) for value in target] if isinstance(target, list) else target_path(target)
+    for target in data.get('target', {}).values():
+        for key in ('linker', 'ar'):
+            if key in target:
+                target[key] = absolute(target[key], True)
+        if 'runner' in target:
+            target['runner'] = command(target['runner'])
+    for source in data.get('source', {}).values():
+        for key in ('directory', 'local-registry'):
+            if key in source:
+                source[key] = absolute(source[key])
+    for key in ('ssl-cainfo', 'proxy-cainfo', 'ssl-cert', 'ssl-key'):
+        if key in data.get('http', {}):
+            data['http'][key] = absolute(data['http'][key])
+    if 'root' in data.get('install', {}):
+        data['install']['root'] = absolute(data['install']['root'])
+    if 'browser' in data.get('doc', {}):
+        data['doc']['browser'] = command(data['doc']['browser'])
+    if 'paths' in data:
+        data['paths'] = [absolute(value) for value in data['paths']]
+    for value in data.get('env', {}).values():
+        if isinstance(value, dict) and value.get('relative') and 'value' in value:
+            value['value'] = absolute(value['value'])
+    for name, value in data.get('credential-alias', {}).items():
+        data['credential-alias'][name] = command(value)
+    for registry in [data.get('registry', {}), *data.get('registries', {}).values()]:
+        if 'credential-provider' in registry:
+            registry['credential-provider'] = command(registry['credential-provider'])
+    if 'global-credential-providers' in data.get('registry', {}):
+        data['registry']['global-credential-providers'] = [
+            command(value) for value in data['registry']['global-credential-providers']]
+    for value in data.get('include', []):
+        if isinstance(value, dict):
+            value['path'] = absolute(value['path'], directory=path.parent)
+    if 'include' in data:
+        data['include'] = [absolute(value, directory=path.parent) if isinstance(value, str) else value
+                           for value in data['include']]
+    return data
+
+
+def inherited_cargo_home(state, configuration):
+    """Give native child Cargo processes the same locked sources as their parent.
+
+    CLI --config is not inherited by cbindgen and other build-script queries.
+    Leave the caller's Cargo home untouched; retain its settings and existing
+    caches through a private configuration and links. No SDK is selected here.
+    """
+    import tomlkit
+
+    state = Path(state).resolve()
+    configuration = Path(configuration).resolve()
+    original = cargo_home().absolute()
+    marker = original / '.cargo-purifier-original-home'
+    if marker.is_file():
+        original = Path(marker.read_text())
+    # Cargo gives the legacy filename precedence when both exist.
+    home_config = next((original / name for name in ('config', 'config.toml')
+                        if (original / name).is_file()), None)
+    text = home_config.read_text() if home_config else ''
+    data = rebase_home_config(tomllib.loads(text), home_config) if home_config else {}
+    sources = {name: dict(value) for name, value in data.get('source', {}).items()}
+    root = state.parent.parent
+    for directory in reversed([root, *root.parents]):
+        project_config = next((directory / '.cargo' / name for name in ('config', 'config.toml')
+                               if (directory / '.cargo' / name).is_file()), None)
+        if project_config:
+            project_data = rebase_home_config(tomllib.loads(project_config.read_text()), project_config)
+            for name, source in project_data.get('source', {}).items():
+                sources.setdefault(name, {}).update(source)
+    replacement_text = configuration.read_text()
+    replacement = tomllib.loads(replacement_text)
+    for name, value in replacement.get('source', {}).items():
+        data.setdefault('source', {}).setdefault(name, {}).update(value)
+    # Project config has higher precedence than global config. Complete its
+    # replacement chains too, so a project-level crates-io -> local alias still
+    # terminates at the locked vendor rather than an uncaptured mutable tree.
+    destination_source = replacement.get('source', {}).get('crates-io', {}).get('replace-with')
+    if destination_source:
+        for name, source in sources.items():
+            if name != destination_source and not source.get('replace-with'):
+                # Outside that project, Cargo cannot see its source definition.
+                # Retain the source identity as well as its replacement edge.
+                inherited = data.setdefault('source', {}).setdefault(name, {})
+                inherited.update(source)
+                inherited['replace-with'] = destination_source
+    data.setdefault('net', {})['offline'] = True
+    identity = hashlib.sha256(os.fsencode(original) + b'\0' + text.encode()
+                              + b'\0' + tomlkit.dumps(data).encode()).hexdigest()
+    homes = state / 'cargo-homes'
+    homes.mkdir(parents=True, exist_ok=True)
+    destination = homes / identity
+    with (state / 'cargo-home.lock').open('a') as guard:
+        fcntl.flock(guard, fcntl.LOCK_EX)
+        if not destination.is_dir():
+            with tempfile.TemporaryDirectory(prefix='.home-', dir=homes) as temporary:
+                staged = Path(temporary) / 'home'
+                staged.mkdir(mode=0o700)
+                if original.is_dir():
+                    for entry in original.iterdir():
+                        if entry.name not in ('config', 'config.toml', '.cargo-purifier-original-home'):
+                            (staged / entry.name).symlink_to(entry)
+                (staged / 'config.toml').write_text(tomlkit.dumps(data))
+                (staged / '.cargo-purifier-original-home').write_text(str(original))
+                staged.rename(destination)
+    return destination
 
 
 def prefetch(options):
@@ -791,6 +1054,7 @@ def native_command(options):
             "--arg", "lockFile", path_arg(lock_path),
             "--arg", "cargoLock", path_arg(cargo_lock),
             "--out-link", str(directory / "vendor")))
+        vendor = writable_vendor(directory, vendor)
         configuration = directory / "config.toml"
         configuration.write_text((vendor / ".cargo/config.toml").read_text()
                                  .replace('"cargo-vendor-dir"', json.dumps(str(vendor)))
@@ -808,15 +1072,37 @@ def native_command(options):
                     sys.stderr.write(validation.stderr)
                     raise Failure("the locked Cargo graph changed; run cargo-purifier lock")
                 return subprocess.call([*command, "--offline", *arguments],
-                                       env=dict(os.environ, CARGO_PURIFIER="0"))
+                                       env=dict(os.environ, CARGO_PURIFIER="0",
+                                                CARGO_HOME=str(inherited_cargo_home(directory, configuration)),
+                                                CARGO_NET_OFFLINE="true"))
         finally:
             (root / "Cargo.lock").write_bytes(saved)
 
 def main(argv):
     args = argv[1:]
+    if args[:1] == ["_runtime-metadata"] and len(args) >= 2:
+        raise SystemExit(0 if runtime_metadata(args[1], args[2:]) else 1)
+    if args == ["_native-cargo"]:
+        print(native_cargo())
+        return 0
     if args and args[0] == "_workspace-root":
         _, manifest = workspace_root(args[1] if len(args) > 1 else None)
         print(manifest)
+        return 0
+    if args and args[0] == "_vendor-stamp":
+        if len(args) != 3:
+            raise Failure("_vendor-stamp needs Cargo.lock and purifier lock paths")
+        print(vendor_stamp(Path(args[1]), Path(args[2])))
+        return 0
+    if args and args[0] == "_writable-vendor":
+        if len(args) != 3:
+            raise Failure("_writable-vendor needs a state directory and vendor directory")
+        print(writable_vendor(args[1], args[2]))
+        return 0
+    if args and args[0] == "_inherited-cargo-home":
+        if len(args) != 3:
+            raise Failure("_inherited-cargo-home needs a state directory and Cargo config path")
+        print(inherited_cargo_home(args[1], args[2]))
         return 0
     # cargo runs an external subcommand with the subcommand's name first.
     if args[:1] == ["purifier"]:

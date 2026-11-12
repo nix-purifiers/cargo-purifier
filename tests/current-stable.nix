@@ -21,12 +21,15 @@ let
   };
 in
 {
-  current-stable-tools = scope.cargo-purifier;
-  current-stable = pkgs.runCommand "cargo-current-stable-1.99.1" { } ''
-    test "$(${toolchain}/bin/rustc --version | cut -d' ' -f2)" = 1.99.1
-    test "$(${scope.cargo-purifier}/bin/cargo --version | cut -d' ' -f2)" = 1.99.1
-    test "$(${scope.cargo-purifier}/bin/rust-analyzer --version | cut -d' ' -f2)" = 1.99.1
-    ${lib.concatMapStringsSep "\n" (check: "test -e ${check}") (builtins.attrValues checks)}
-    printf '%s\n' 'Rust/Cargo 1.99.1: full fixture and ripgrep checks passed' > "$out"
-  '';
+  current-stable-tools = stable.tools;
+  current-stable =
+    pkgs.runCommand "cargo-current-stable-1.99.1" { nativeBuildInputs = [ toolchain ]; }
+      ''
+            test "$(${toolchain}/bin/rustc --version | cut -d' ' -f2)" = 1.99.1
+        test "$(${stable.tools}/bin/cargo --version | cut -d' ' -f2)" = 1.99.1
+        test "$(${stable.tools}/bin/rustc --version | cut -d' ' -f2)" = 1.99.1
+            test "$(${scope.rust-analyzer}/bin/rust-analyzer --version | cut -d' ' -f2)" = 1.99.1
+            ${lib.concatMapStringsSep "\n" (check: "test -e ${check}") (builtins.attrValues checks)}
+            printf '%s\n' 'Rust/Cargo 1.99.1: full fixture and ripgrep checks passed' > "$out"
+      '';
 }

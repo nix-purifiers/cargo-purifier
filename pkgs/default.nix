@@ -5,7 +5,7 @@
 # the purifier library and readLock.
 { callPackage, lib, ... }:
 let
-  command = callPackage ./cargo-purifier { };
+  command = callPackage ./cargo-purifier { inherit lib; };
   cargo = callPackage ./cargo { inherit command; };
   rust-analyzer = callPackage ./rust-analyzer { inherit cargo; };
 in
@@ -19,8 +19,9 @@ in
   inherit cargo;
   # rust-analyzer on the locked sources: the editor.
   inherit rust-analyzer;
-  # The `cargo-purifier` command, with the cargo wrapper and rust-analyzer
-  # beside it. `cargo-purifier prefetch` keeps this package alive in the
+  # The local `cargo-purifier` command and Cargo wrapper. The optional editor
+  # helper remains available separately as `rust-analyzer` above.
+  # `cargo-purifier prefetch` keeps this package alive in the
   # project's GC root, through the store path it records here.
   cargo-purifier = callPackage (
     { symlinkJoin, makeWrapper }:
@@ -29,7 +30,6 @@ in
       paths = [
         command
         cargo
-        rust-analyzer
       ];
       nativeBuildInputs = [ makeWrapper ];
       postBuild = ''

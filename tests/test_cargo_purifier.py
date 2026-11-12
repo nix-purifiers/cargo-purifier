@@ -3,6 +3,7 @@
 git dependencies are fetched from, cargo's configuration, and the publish
 request."""
 
+import contextlib
 import io
 import json
 import os
@@ -13,6 +14,142 @@ from pathlib import Path
 from unittest import mock
 
 import cargo_purifier as cargo_purify
+
+
+class NativeCargo(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.environment = mock.patch.dict(os.environ, {'PATH': str(self.root)}, clear=True)
+        self.environment.start()
+        self.addCleanup(self.environment.stop)
+
+    def executable(self, path, text):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('#!/bin/sh\n' + text)
+        path.chmod(0o755)
+        return path
+
+    def test_skip_multiple_purifier_wrappers_and_preserve_host_path(self):
+        first = self.executable(self.root / 'one/cargo', '# cargo-purifier native-cargo wrapper\nexit 99\n')
+        second = self.executable(self.root / 'two/cargo', '# old CARGO_PURIFIER_LOCKFILE wrapper\nexit 98\n')
+        host = self.executable(self.root / 'host/cargo', 'echo installed-cargo\n')
+        os.environ['PATH'] = os.pathsep.join(str(p.parent) for p in (first, second, host))
+        os.environ['CARGO'] = str(first)
+        self.assertEqual(cargo_purify.native_cargo(), str(host))
+        self.assertEqual(cargo_purify.run(['cargo', '--version']), 'installed-cargo\n')
+
+    def test_missing_runtime_does_not_choose_a_packaged_sdk(self):
+        with self.assertRaisesRegex(cargo_purify.Failure, 'no installed Cargo'):
+            cargo_purify.native_cargo()
+
+    def test_explicit_runtime_wins_and_invalid_override_does_not_fall_back(self):
+        self.executable(self.root / 'cargo', 'echo path-cargo\n')
+        supplied = self.executable(self.root / 'selected', 'echo supplied-cargo\n')
+        os.environ['CARGO_PURIFIER_REAL_CARGO'] = str(supplied)
+        self.assertEqual(cargo_purify.run(['cargo', '--version']), 'supplied-cargo\n')
+        supplied.unlink()
+        with self.assertRaisesRegex(cargo_purify.Failure, 'not an executable'):
+            cargo_purify.native_cargo()
+
+    def test_explicit_wrapper_is_rejected_without_recursing(self):
+        wrapper = self.executable(self.root / 'cargo', '# cargo-purifier native-cargo wrapper\nexit 99\n')
+        os.environ['CARGO_PURIFIER_REAL_CARGO'] = str(wrapper)
+        with self.assertRaisesRegex(cargo_purify.Failure, 'purifier wrapper'):
+            cargo_purify.native_cargo()
+
+    def test_external_subcommand_uses_its_invoking_cargo(self):
+        self.executable(self.root / 'cargo', 'echo path-cargo\n')
+        supplied = self.executable(self.root / 'invoking/cargo', 'echo invoking-cargo\n')
+        os.environ['CARGO'] = str(supplied)
+        self.assertEqual(cargo_purify.run(['cargo', '--version']), 'invoking-cargo\n')
+
+    def test_rustup_proxy_keeps_argv0_and_original_project_selection(self):
+        rustup = self.executable(self.root / 'rustup',
+            'case "$0" in */rustup) printf "%s-sdk (directory override)\\n" "${PWD##*/}";; '
+            '*) printf "%s:%s:%s\\n" "$0" "$RUSTUP_TOOLCHAIN" "$RUSTC";; esac\n')
+        proxy = self.root / 'cargo'
+        proxy.symlink_to(rustup)
+        os.environ['RUSTC'] = '/user/compiler-wrapper'
+        original = self.root / 'original'
+        copied = self.root / 'copied'
+        original.mkdir()
+        copied.mkdir()
+        with contextlib.chdir(original):
+            self.assertEqual(cargo_purify.native_cargo(), str(proxy))
+        self.assertEqual(cargo_purify.run(['cargo', '--version'], cwd=copied),
+                         f'{proxy}:original-sdk:/user/compiler-wrapper\n')
+
+    def test_explicit_rustup_toolchain_is_preserved(self):
+        rustup = self.executable(self.root / 'rustup', 'exit 99\n')
+        (self.root / 'cargo').symlink_to(rustup)
+        os.environ['RUSTUP_TOOLCHAIN'] = 'user-pinned-sdk'
+        self.assertEqual(cargo_purify.native_cargo(), str(self.root / 'cargo'))
+        self.assertEqual(os.environ['RUSTUP_TOOLCHAIN'], 'user-pinned-sdk')
+
+    def test_rustup_proxy_outside_its_install_directory(self):
+        rustup = self.executable(self.root / 'installation/rustup',
+                                 'printf "external-sdk (directory override)\\n"\n')
+        proxy = self.root / 'cargo'
+        proxy.symlink_to(rustup)
+        self.assertEqual(cargo_purify.native_cargo(), str(proxy))
+        self.assertEqual(os.environ['RUSTUP_TOOLCHAIN'], 'external-sdk')
+
+    def test_explicit_empty_toolchain_environment_is_not_replaced(self):
+        rustup = self.executable(self.root / 'rustup', 'exit 99\n')
+        (self.root / 'cargo').symlink_to(rustup)
+        os.environ['RUSTUP_TOOLCHAIN'] = ''
+        self.assertEqual(cargo_purify.native_cargo(), str(self.root / 'cargo'))
+        self.assertEqual(os.environ['RUSTUP_TOOLCHAIN'], '')
+
+
+class RuntimeMetadata(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.sdk = self.root / 'sdk'
+        self.manifest = self.sdk / 'lib/rustlib/src/rust/library/Cargo.toml'
+        self.manifest.parent.mkdir(parents=True)
+        self.manifest.write_text('[workspace]\n')
+        environment = mock.patch.dict(os.environ, {
+            'RUSTUP_TOOLCHAIN': str(self.sdk),
+            'CARGO_RESOLVER_LOCKFILE_PATH': str(self.root / 'temporary/Cargo.lock'),
+        }, clear=True)
+        environment.start()
+        self.addCleanup(environment.stop)
+
+    def test_redirected_sdk_metadata_is_separate_from_project_lock(self):
+        self.assertTrue(cargo_purify.runtime_metadata(
+            'metadata', ['metadata', '--manifest-path', str(self.manifest)]))
+        self.assertTrue(cargo_purify.runtime_metadata(
+            'metadata', ['metadata', '--manifest-path=' + str(self.manifest)]))
+        with contextlib.chdir(self.manifest.parent):
+            self.assertTrue(cargo_purify.runtime_metadata('metadata', ['metadata']))
+
+    def test_project_metadata_keeps_project_lock(self):
+        self.assertFalse(cargo_purify.runtime_metadata(
+            'metadata', ['metadata', '--manifest-path', str(self.root / 'project/Cargo.toml')]))
+
+    def test_user_supplied_sdk_sources_need_not_live_under_sysroot(self):
+        sources = self.root / 'custom-sources'
+        os.environ['RUST_SRC_PATH'] = str(sources)
+        args = ['--manifest-path', str(sources / 'Cargo.toml')]
+        self.assertTrue(cargo_purify.runtime_metadata('metadata', args))
+        self.assertFalse(cargo_purify.runtime_metadata('build', args))
+
+    def test_builds_and_unredirected_sdk_queries_keep_lock_guards(self):
+        args = ['--manifest-path', str(self.manifest)]
+        self.assertFalse(cargo_purify.runtime_metadata('build', args))
+        del os.environ['CARGO_RESOLVER_LOCKFILE_PATH']
+        self.assertFalse(cargo_purify.runtime_metadata('metadata', args))
+
+    def test_named_toolchain_is_not_an_sdk_source_path(self):
+        os.environ['RUSTUP_TOOLCHAIN'] = 'custom-toolchain'
+        self.assertFalse(cargo_purify.runtime_metadata(
+            'metadata', ['--manifest-path', str(self.manifest)]))
+
 
 
 class GitSource(unittest.TestCase):
@@ -277,6 +414,138 @@ class OutsideCargoLock(unittest.TestCase):
                     raise RuntimeError
             self.assertFalse(outside.exists())
             self.assertEqual((root / "Cargo.lock").read_bytes(), b"tree\n")
+
+
+class WritableVendor(unittest.TestCase):
+    def test_generated_files_do_not_modify_store_sources(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "store-source"
+            source.mkdir()
+            (source / "build.rs").write_text("// original\n")
+            (source / "build.rs").chmod(0o444)
+            vendor = root / "vendor-output"
+            vendor.mkdir()
+            (vendor / "plugin").symlink_to(source, target_is_directory=True)
+            state = root / "state"
+            copied = cargo_purify.writable_vendor(state, vendor)
+            self.assertFalse((copied / "plugin").is_symlink())
+            (copied / "plugin" / "permissions").mkdir()
+            (copied / "plugin" / "permissions" / "generated.toml").write_text("allow = true\n")
+            self.assertFalse((source / "permissions").exists())
+            self.assertEqual((source / "build.rs").read_text(), "// original\n")
+            self.assertEqual((source / "build.rs").stat().st_mode & 0o222, 0)
+            self.assertEqual(cargo_purify.writable_vendor(state, vendor), copied)
+            self.assertTrue((copied / "plugin" / "permissions" / "generated.toml").exists())
+
+    def test_retained_repository_links_preserve_parent_assets(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repository = root / "git-store"
+            (repository / "nested" / "crate").mkdir(parents=True)
+            (repository / "README.md").write_text("repository documentation")
+            vendor = root / "vendor-output"
+            (vendor / ".git-sources").mkdir(parents=True)
+            (vendor / ".git-sources" / "checkout").symlink_to(repository, target_is_directory=True)
+            (vendor / "dependency-1.0.0").symlink_to(".git-sources/checkout/nested/crate", target_is_directory=True)
+            copied = cargo_purify.writable_vendor(root / "state", vendor)
+            alias = copied / "dependency-1.0.0"
+            self.assertTrue(alias.is_symlink())
+            self.assertFalse((copied / ".git-sources/checkout").is_symlink())
+            self.assertEqual((alias / "../../README.md").read_text(), "repository documentation")
+            (alias / "../../README.md").write_text("generated documentation")
+            self.assertEqual((repository / "README.md").read_text(), "repository documentation")
+
+    def test_vendoring_upgrade_invalidates_cached_output(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            native, lock = root / "Cargo.lock", root / "purifier.json"
+            native.write_text("unchanged native lock")
+            lock.write_text("unchanged purifier lock")
+            with mock.patch.dict(os.environ, CARGO_PURIFIER_NIX_LIB="/nix/store/old-lib"):
+                old = cargo_purify.vendor_stamp(native, lock)
+            with mock.patch.dict(os.environ, CARGO_PURIFIER_NIX_LIB="/nix/store/new-lib"):
+                new = cargo_purify.vendor_stamp(native, lock)
+            self.assertNotEqual(old, new)
+
+    def test_changed_vendor_output_has_a_new_worktree(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            first, second = root / "first", root / "second"
+            first.mkdir()
+            second.mkdir()
+            (first / "lib.rs").write_text("first")
+            (second / "lib.rs").write_text("second")
+            state = root / "state"
+            one = cargo_purify.writable_vendor(state, first)
+            two = cargo_purify.writable_vendor(state, second)
+            self.assertNotEqual(one, two)
+            self.assertEqual((two / "lib.rs").read_text(), "second")
+
+
+class InheritedCargoHome(unittest.TestCase):
+    def test_project_source_identity_survives_an_unrelated_working_directory(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = root / 'project'
+            (project / '.cargo').mkdir(parents=True)
+            (project / '.cargo/config.toml').write_text(
+                '[source.crates-io]\nreplace-with="local"\n'
+                '[source.local]\ndirectory="sources"\n')
+            configuration = root / 'vendor.toml'
+            configuration.write_text('[source.crates-io]\nreplace-with="frozen"\n'
+                                     '[source.frozen]\ndirectory="/immutable/vendor"\n')
+            with mock.patch.dict(os.environ, CARGO_HOME=str(root / 'caller-home')):
+                home = cargo_purify.inherited_cargo_home(project / 'target/cargo-purifier', configuration)
+            data = cargo_purify.tomllib.loads((home / 'config.toml').read_text())
+            self.assertEqual(data['source']['local'], {
+                'directory': str(project / 'sources'), 'replace-with': 'frozen'})
+
+    def test_legacy_config_paths_cache_links_and_repeated_calls(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            home = root / 'caller-home'
+            home.mkdir()
+            (home / 'registry').mkdir()
+            (home / 'registry' / 'sentinel').write_text('cached')
+            original = ('[env]\nRELATIVE_INPUT = {value="inputs", relative=true}\n'
+                        '[build]\nrustc-wrapper="tools/wrapper"\ntarget-dir="output"\n'
+                        '[target.x86_64-unknown-linux-gnu]\nrunner=["tools/runner", "--flag"]\n')
+            (home / 'config').write_text(original)
+            (home / 'config.toml').write_text('[env]\nWRONG="ignored"\n')
+            vendor = root / 'vendor-config.toml'
+            vendor.write_text('[source.crates-io]\nreplace-with="frozen"\n'
+                              '[source.frozen]\ndirectory="/immutable/vendor"\n')
+            with mock.patch.dict(os.environ, CARGO_HOME=str(home)):
+                overlay = cargo_purify.inherited_cargo_home(root / 'state', vendor)
+            data = cargo_purify.tomllib.loads((overlay / 'config.toml').read_text())
+            self.assertEqual(data['env']['RELATIVE_INPUT']['value'], str(root / 'inputs'))
+            self.assertNotIn('WRONG', data['env'])
+            self.assertEqual(data['build']['rustc-wrapper'], str(root / 'tools/wrapper'))
+            self.assertEqual(data['build']['target-dir'], str(root / 'output'))
+            self.assertEqual(data['target']['x86_64-unknown-linux-gnu']['runner'],
+                             [str(root / 'tools/runner'), '--flag'])
+            self.assertEqual(data['source']['frozen']['directory'], '/immutable/vendor')
+            self.assertTrue((overlay / 'registry').is_symlink())
+            self.assertEqual((overlay / 'registry/sentinel').read_text(), 'cached')
+            self.assertEqual((home / 'config').read_text(), original)
+            self.assertTrue(data['net']['offline'])
+            with mock.patch.dict(os.environ, CARGO_HOME=str(overlay)):
+                self.assertEqual(cargo_purify.inherited_cargo_home(root / 'state', vendor), overlay)
+
+    def test_preserve_bare_commands_and_rebase_existing_includes(self):
+        path = Path('/original/.cargo/config.toml')
+        data = {'build': {'rustc': 'rustc', 'rustdoc': './bin/rustdoc'},
+                'target': {'custom': {'runner': 'tools/run --argument'}},
+                'include': ['shared.toml', {'path': '../optional.toml', 'optional': True}],
+                'env': {'ABSOLUTE': {'value': '/fixed', 'relative': True}}}
+        changed = cargo_purify.rebase_home_config(data, path)
+        self.assertEqual(changed['build']['rustc'], 'rustc')
+        self.assertEqual(changed['build']['rustdoc'], '/original/bin/rustdoc')
+        self.assertEqual(changed['target']['custom']['runner'], '/original/tools/run --argument')
+        self.assertEqual(changed['include'][0], '/original/.cargo/shared.toml')
+        self.assertEqual(changed['include'][1]['path'], '/original/.cargo/../optional.toml')
+        self.assertEqual(changed['env']['ABSOLUTE']['value'], '/fixed')
 
 
 if __name__ == "__main__":

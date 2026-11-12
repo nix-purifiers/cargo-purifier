@@ -2,7 +2,6 @@
 """Hold a real wrapper writer at a FIFO while native Cargo reads its config."""
 import argparse
 import errno
-import hashlib
 import os
 from pathlib import Path
 import shutil
@@ -31,17 +30,24 @@ def main():
                 (vendor / path.name).symlink_to(path)
         (vendor / '.cargo').mkdir()
         template = (args.vendor / '.cargo/config.toml').read_text()
+        (vendor / '.cargo/config.toml').write_text(template)
         config = state / 'config.toml'
-        original = template.replace('directory = "cargo-vendor-dir"',
-                                    f'directory = "{vendor}"').encode()
-        config.write_bytes(original)
         (state / 'vendor').symlink_to(vendor)
-        digest = hashlib.sha256((project / 'cargo-purifier.lock.json').read_bytes()
-                                + (project / 'Cargo.lock').read_bytes()).hexdigest()
-        (state / 'stamp').write_text(digest + '  -\n')
         environment = dict(os.environ, HOME=str(root / 'home'),
                            CARGO_HOME=str(root / 'cargo-home'),
+                           CARGO_PURIFIER_REAL_CARGO=str(args.cargo),
                            PATH=str(args.tools / 'bin') + ':' + os.environ['PATH'])
+        digest = subprocess.check_output(
+            [str(args.tools / 'bin/cargo-purifier'), '_vendor-stamp',
+             str(project / 'Cargo.lock'), str(project / 'cargo-purifier.lock.json')],
+            env=environment, text=True)
+        (state / 'stamp').write_text(digest)
+        worktree = Path(subprocess.check_output(
+            [str(args.tools / 'bin/cargo-purifier'), '_writable-vendor', str(state), str(vendor)],
+            cwd=project, env=environment, text=True).strip())
+        original = template.replace('directory = "cargo-vendor-dir"',
+                                    f'directory = "{worktree}"').encode()
+        config.write_bytes(original)
         reader = [str(args.cargo), '--config', str(config), 'metadata',
                   '--offline', '--locked', '--format-version', '1']
 
@@ -51,7 +57,8 @@ def main():
 
         before = read_graph()
         assert before.returncode == 0, before.stderr
-        fifo = vendor / '.cargo/config.toml'
+        fifo = worktree / '.cargo/config.toml'
+        fifo.unlink()
         os.mkfifo(fifo)
         writer = subprocess.Popen([str(args.tools / 'bin/cargo'), 'metadata',
                                    '--locked', '--format-version', '1'],

@@ -26,9 +26,6 @@
   diffutils,
   gnused,
   gnugrep,
-  # nixpkgs' cargo and rustc, taken from `pkgs`: in this package scope
-  # `cargo` names this wrapper.
-  pkgs,
   # The `cargo-purifier` command.
   command,
 }:
@@ -41,7 +38,6 @@ let
       ../cargo-purifier
     ];
   };
-  inherit (pkgs) cargo rustc;
 in
 writeShellApplication {
   name = "cargo";
@@ -52,16 +48,15 @@ writeShellApplication {
     gnugrep
   ];
   text = ''
-    real=${lib.getExe cargo}
-    # `cargo purifier` runs the cargo-purifier command, and cargo needs
-    # rustc. rustc links with `cc`, and the package set's C compiler comes
-    # last on the PATH, so a `cc` the user already has comes first.
-    export PATH="${
-      lib.makeBinPath [
-        command
-        rustc
-      ]
-    }:$PATH:${lib.makeBinPath [ stdenv.cc ]}"
+    # cargo-purifier native-cargo wrapper
+    # Rustup's leading +toolchain takes precedence over directory overrides.
+    # Resolve in that context, including when the default SDK is unavailable.
+    case "''${1:-}" in
+      +*) export RUSTUP_TOOLCHAIN="''${1#+}" ;;
+    esac
+    real=$(${lib.getExe command} _native-cargo)
+    export CARGO_PURIFIER_REAL_CARGO="$real"
+    export PATH="${lib.makeBinPath [ command ]}:$PATH"
 
     # The subcommand is the first argument that is neither an option nor
     # an option's value.
@@ -83,7 +78,36 @@ writeShellApplication {
       exec "$real" "$@"
     fi
 
-    manifest=$(${lib.getExe command} _workspace-root 2>/dev/null) || {
+    # An editor's redirected standard-library graph belongs to the installed
+    # SDK. The surrounding project's external lock does not govern it.
+    if [ "$sub" = metadata ] && [ -n "''${CARGO_RESOLVER_LOCKFILE_PATH:-}" ] && \
+      ${lib.getExe command} _runtime-metadata "$sub" "$@"; then
+      exec "$real" "$@"
+    fi
+
+    # Resolve the workspace Cargo was asked to operate on, including calls
+    # made from a different project. Arguments after -- belong to the program
+    # or test harness and must not select the Cargo workspace.
+    workspace_args=()
+    i=0
+    while [ "$i" -lt "''${#args[@]}" ]; do
+      case "''${args[$i]}" in
+        --) break ;;
+        --manifest-path)
+          if [ "$((i + 1))" -lt "''${#args[@]}" ]; then
+            workspace_args=("''${args[$((i + 1))]}")
+          fi
+          i=$((i + 2))
+          ;;
+        --manifest-path=*)
+          workspace_args=("''${args[$i]#--manifest-path=}")
+          i=$((i + 1))
+          ;;
+        --config | --color | -C | -Z | --explain) i=$((i + 2)) ;;
+        *) i=$((i + 1)) ;;
+      esac
+    done
+    manifest=$(${lib.getExe command} _workspace-root "''${workspace_args[@]}" 2>/dev/null) || {
       echo "cargo-purifier: warning: no cargo-purifier.lock.json found; running cargo impurely. Run \`cargo-purifier lock\` to use Nix-resolved dependencies." >&2
       exec "$real" "$@"
     }
@@ -124,7 +148,7 @@ writeShellApplication {
 
     state=$root/target/cargo-purifier
     mkdir -p "$state"
-    stamp=$(cat "$lock" "$root/Cargo.lock" | sha256sum)
+    stamp=$(${lib.getExe command} _vendor-stamp "$root/Cargo.lock" "$lock")
     if [ -e "$state/vendor" ] && [ "$(cat "$state/stamp" 2>/dev/null)" = "$stamp" ]; then
       vendor=$(readlink -f "$state/vendor")
     elif vendor=$(nix-build ${runtimeSource}/pkgs/cargo-purifier/tool-vendor.nix \
@@ -140,6 +164,11 @@ writeShellApplication {
       stop "the locked sources did not build: ''${reason:-see $state/nix-build.log}. Run \`cargo-purifier lock\` if Cargo.lock changed, or \`cargo-purifier prefetch\` while online before working offline."
     fi
 
+    # Some native build scripts generate files beside their own sources
+    # (Tauri permissions, for example). Use a writable private materialization;
+    # the vendor symlink above remains the immutable Nix store/GC root.
+    vendor=$(${lib.getExe command} _writable-vendor "$state" "$vendor")
+
     # rust-analyzer can run metadata and check concurrently. Never truncate
     # the configuration another Cargo process is reading: an empty config
     # silently disables vendoring and makes its offline resolution fail.
@@ -153,12 +182,18 @@ writeShellApplication {
     # A manifest that needs a dependency Cargo.lock lacks cannot resolve
     # from the vendored sources: cargo finds no such package there, or wants
     # to update Cargo.lock.
-    if ! "$real" --config "$state/config.toml" metadata --offline --locked --format-version 1 \
+    if ! "$real" --config "$state/config.toml" metadata --manifest-path "$manifest" --offline --locked --format-version 1 \
       >/dev/null 2>"$state/metadata.log" &&
       grep -q -e 'needs to be updated' -e 'no matching package named' "$state/metadata.log"; then
       stop "Cargo.toml needs dependencies that Cargo.lock lacks. Run \`cargo-purifier lock\` to lock them."
     fi
 
+    # Native Cargo children (for example cbindgen metadata) do not inherit
+    # --config. Keep the caller's home unchanged and share the locked sources
+    # through a private home with the original settings and cache links.
+    export CARGO_HOME
+    CARGO_HOME=$(${lib.getExe command} _inherited-cargo-home "$state" "$state/config.toml")
+    export CARGO_NET_OFFLINE=true
     exec "$real" --config "$state/config.toml" --offline "$@"
   '';
 }

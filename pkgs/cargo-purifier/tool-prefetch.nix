@@ -4,10 +4,8 @@
 # the editor need, in one store path that its GC root keeps alive.
 #
 #   vendor    the vendored sources of the workspace
-#   tools     the cargo-purifier package: the cargo wrapper with its cargo,
-#             rustc and C compiler, and rust-analyzer with its proc-macro
-#             server
-#   rust-src  the standard library's sources, which rust-analyzer reads
+#   tools     the local cargo-purifier command and Cargo wrapper. The project's
+#             installed SDK and editor tools remain selected by the caller.
 #
 #   nix-build tool-prefetch.nix --arg nixpkgs <path> --argstr system <system> \
 #     --arg src <workspace root> --arg lockFile <cargo-purifier.lock.json> \
@@ -41,7 +39,6 @@ in
 pkgs.linkFarm "cargo-purifier-prefetch" (
   {
     inherit vendor;
-    rust-src = pkgs.rustPlatform.rustLibSrc;
   }
   // pkgs.lib.optionalAttrs (tools != null) { inherit tools; }
 )

@@ -43,4 +43,31 @@ let
 in
 {
   inherit selected scope toolchain;
+  # This existing opt-in profile deliberately supplies a complete SDK.
+  tools = pkgs.symlinkJoin {
+    name = "cargo-purifier-current-stable";
+    paths = [
+      scope.cargo-purifier
+      toolchain
+    ];
+    nativeBuildInputs = [ pkgs.makeWrapper ];
+    postBuild = ''
+      wrapProgram $out/bin/cargo \
+        --run ": 'cargo-purifier native-cargo wrapper'" \
+        --prefix PATH : ${
+          pkgs.lib.makeBinPath [
+            toolchain
+            pkgs.stdenv.cc
+          ]
+        }
+      wrapProgram $out/bin/cargo-purifier \
+        --prefix PATH : ${
+          pkgs.lib.makeBinPath [
+            toolchain
+            pkgs.stdenv.cc
+          ]
+        }
+    '';
+    meta.mainProgram = "cargo-purifier";
+  };
 }
