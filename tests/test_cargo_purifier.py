@@ -549,6 +549,13 @@ class InheritedCargoHome(unittest.TestCase):
 
 
 class StandardLibraryVendor(unittest.TestCase):
+    def test_invalid_explicit_rustc_does_not_fall_back_to_path(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            missing = str(Path(temporary) / 'missing-rustc')
+            with mock.patch.dict(os.environ, RUSTC=missing):
+                with self.assertRaisesRegex(cargo_purify.Failure, 'cannot inspect the selected rustc'):
+                    cargo_purify.stdlib_lock()
+
     def test_sdk_queries_cannot_select_an_arbitrary_foreign_workspace(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

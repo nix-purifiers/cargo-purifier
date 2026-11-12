@@ -678,8 +678,11 @@ def stdlib_lock(arguments=()):
     rustc = selected_rustc(arguments)
     if rustc is None:
         return None
-    result = subprocess.run([rustc, '--print', 'sysroot'], text=True, capture_output=True,
-                            env=dict(os.environ, CARGO_PURIFIER='0'), timeout=30)
+    try:
+        result = subprocess.run([rustc, '--print', 'sysroot'], text=True, capture_output=True,
+                                env=dict(os.environ, CARGO_PURIFIER='0'), timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise Failure(f'cannot inspect the selected rustc {rustc!r}: {error}') from error
     if result.returncode:
         raise Failure('the selected rustc could not report its sysroot: ' + result.stderr.strip())
     lock = Path(result.stdout.strip()) / 'lib/rustlib/src/rust/library/Cargo.lock'
