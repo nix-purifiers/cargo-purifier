@@ -750,8 +750,8 @@ def writable_vendor(state, vendor):
     """Materialize immutable Nix sources for build scripts generating adjacent files.
 
     Keep the store output as the GC root and identity of the locked sources.
-    A private, atomic copy per output lets native Cargo build scripts write just
-    as they do in CARGO_HOME, without following symlinks back into the store.
+    A private, atomic copy per project and output lets native Cargo build scripts
+    write as they do in CARGO_HOME, without following links back into the store.
     """
     state = Path(state)
     vendor = Path(vendor).resolve()
@@ -760,8 +760,11 @@ def writable_vendor(state, vendor):
     # Dependency diagnostics need Cargo's registry cache shape so consumers can
     # normalize source locations. Keep the full identity as well as the native
     # sixteen-hex suffix; truncating the cache identity would admit collisions.
-    copies = state / "vendor-worktrees" / "registry" / "src"
-    copies.mkdir(parents=True, exist_ok=True)
+    cache_home = os.environ.get("XDG_CACHE_HOME")
+    cache = Path(cache_home) if cache_home else Path.home() / ".cache"
+    project = hashlib.sha256(os.fsencode(state.resolve())).hexdigest()
+    copies = cache / "cargo-purifier" / "vendor-worktrees" / project / "registry" / "src"
+    copies.mkdir(mode=0o700, parents=True, exist_ok=True)
     destination = copies / f"cargo-purifier-{identity}-{identity[:16]}"
     with (state / "vendor-copy.lock").open("a") as guard:
         fcntl.flock(guard, fcntl.LOCK_EX)

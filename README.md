@@ -351,6 +351,15 @@ Fully sandboxed project builds separately use the builder's immutable
 Project SDK selection and implementation dependencies are separate: packaging
 the purifier's Python or Git helpers can require their own build tools.
 
+Build scripts use writable dependency copies in
+`$XDG_CACHE_HOME/cargo-purifier` (by default `~/.cache/cargo-purifier`). The
+copies are separate for each project and locked vendor output. Keeping them
+outside the workspace by default, with Cargo's registry cache path shape,
+lets diagnostic consumers recognize dependency source locations. The caller's
+Cargo home is left untouched. `cargo clean` keeps these source copies, as it
+does native Cargo's source cache; remove the purifier cache to discard files
+generated beside dependency sources.
+
 ## Editor
 
 Use your installed `rust-analyzer` with the purifier's Cargo wrapper on its

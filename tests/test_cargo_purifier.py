@@ -418,6 +418,26 @@ class OutsideCargoLock(unittest.TestCase):
 
 
 class WritableVendor(unittest.TestCase):
+    def setUp(self):
+        cache = tempfile.TemporaryDirectory()
+        self.addCleanup(cache.cleanup)
+        environment = mock.patch.dict(os.environ, XDG_CACHE_HOME=cache.name)
+        environment.start()
+        self.addCleanup(environment.stop)
+
+    def test_projects_do_not_share_mutable_source_trees(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            vendor = root / "vendor"
+            vendor.mkdir()
+            (vendor / "generated.rs").write_text("original")
+            first = cargo_purify.writable_vendor(root / "first/target", vendor)
+            second = cargo_purify.writable_vendor(root / "second/target", vendor)
+            (first / "generated.rs").write_text("first project's generated source")
+            self.assertNotEqual(first, second)
+            self.assertEqual((second / "generated.rs").read_text(), "original")
+            self.assertEqual((vendor / "generated.rs").read_text(), "original")
+
     def test_dependency_diagnostics_have_normalizable_registry_locations(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
