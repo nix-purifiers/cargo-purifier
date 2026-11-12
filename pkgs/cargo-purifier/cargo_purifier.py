@@ -757,9 +757,12 @@ def writable_vendor(state, vendor):
     vendor = Path(vendor).resolve()
     state.mkdir(parents=True, exist_ok=True)
     identity = hashlib.sha256(os.fsencode(vendor)).hexdigest()
-    copies = state / "vendor-worktrees"
-    copies.mkdir(exist_ok=True)
-    destination = copies / identity
+    # Dependency diagnostics need Cargo's registry cache shape so consumers can
+    # normalize source locations. Keep the full identity as well as the native
+    # sixteen-hex suffix; truncating the cache identity would admit collisions.
+    copies = state / "vendor-worktrees" / "registry" / "src"
+    copies.mkdir(parents=True, exist_ok=True)
+    destination = copies / f"cargo-purifier-{identity}-{identity[:16]}"
     with (state / "vendor-copy.lock").open("a") as guard:
         fcntl.flock(guard, fcntl.LOCK_EX)
         if destination.is_dir():

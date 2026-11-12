@@ -456,6 +456,7 @@ realWorld
       {
         nativeBuildInputs = [
           pkgs.nix
+          pkgs.rustc
           (pkgs.python3.withPackages (python: [ python.tomlkit ]))
         ];
       }

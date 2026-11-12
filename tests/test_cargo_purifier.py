@@ -418,6 +418,44 @@ class OutsideCargoLock(unittest.TestCase):
 
 
 class WritableVendor(unittest.TestCase):
+    def test_dependency_diagnostics_have_normalizable_registry_locations(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            vendor = root / "vendor"
+            dependency = vendor / "diagnostic-dependency-1.0.0" / "src"
+            dependency.mkdir(parents=True)
+            (dependency / "lib.rs").write_text("pub fn required<T: core::fmt::Debug>(_: T) {}\n")
+            copied = cargo_purify.writable_vendor(root / "state", vendor)
+            metadata = root / "libdiagnostic_dependency.rmeta"
+            subprocess.run([
+                "rustc", "--edition=2021", "--crate-type=lib", "--emit=metadata",
+                "--crate-name=diagnostic_dependency",
+                str(copied / "diagnostic-dependency-1.0.0/src/lib.rs"),
+                "-o", str(metadata),
+            ], check=True, capture_output=True, text=True)
+            program = root / "main.rs"
+            program.write_text("struct NoDebug; fn main() { diagnostic_dependency::required(NoDebug); }\n")
+            result = subprocess.run([
+                "rustc", "--edition=2021", "--emit=metadata", "--error-format=json",
+                "--extern", f"diagnostic_dependency={metadata}", str(program),
+                "-o", str(root / "main.rmeta"),
+            ], capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            locations = []
+
+            def spans(diagnostic):
+                locations.extend(span["file_name"] for span in diagnostic.get("spans", []))
+                for child in diagnostic.get("children", []):
+                    spans(child)
+
+            for line in result.stderr.splitlines():
+                spans(json.loads(line))
+            dependency_locations = [path for path in locations
+                                    if path.endswith("/diagnostic-dependency-1.0.0/src/lib.rs")]
+            self.assertTrue(dependency_locations, result.stderr)
+            for path in dependency_locations:
+                self.assertRegex(path, r"/registry/src/[^/]+-[0-9a-f]{16}/diagnostic-dependency-1\.0\.0/src/lib\.rs$")
+
     def test_generated_files_do_not_modify_store_sources(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
