@@ -1125,8 +1125,8 @@ def main(argv):
     if args[:1] == ["_stdlib-metadata"] and len(args) >= 2:
         raise SystemExit(0 if stdlib_metadata(args[1], args[2:]) else 1)
     if args == ['_stdlib-lock']:
-        lock = stdlib_lock()
-        print(lock if lock else '')
+        sdk_lock = stdlib_lock()
+        print(sdk_lock if sdk_lock else '')
         return 0
     if args == ["_native-cargo"]:
         print(native_cargo())
