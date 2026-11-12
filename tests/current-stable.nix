@@ -10,7 +10,7 @@
 }:
 let
   lib = pkgs.lib;
-  stable = import ../nix/lib/current-stable-scope.nix {
+  stable = import ../pkgs/cargo-purifier/current-stable-scope.nix {
     inherit pkgs overlay rustOverlaySource;
   };
   inherit (stable) selected scope toolchain;

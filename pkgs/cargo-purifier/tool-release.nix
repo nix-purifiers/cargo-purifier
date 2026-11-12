@@ -28,7 +28,7 @@ let
       null
     else
       import (sharedSource + "/default.nix") { inherit (pkgs) lib; };
-  project = import ./project.nix {
+  project = import ../build-cargo-project/project.nix {
     inherit purifier repositoryTools;
     inherit (pkgs) python3;
     dependencies =

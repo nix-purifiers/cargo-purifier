@@ -103,7 +103,7 @@ system.
 
 `fetchers.fetchurl` and `fetchers.fetchgit` replace nixpkgs' fetchers for
 every download, crates.io included, for a mirror or credentials.
-`nix/lib/build-cargo-project.nix` documents the other arguments: `doCheck`
+`pkgs/build-cargo-project/default.nix` documents the other arguments: `doCheck`
 also runs each package's tests in its build, and `srcFilter` chooses the
 files of a path `src` the builds see. The builder takes the packages it
 builds with by name from the scope, so

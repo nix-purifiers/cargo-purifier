@@ -36,7 +36,7 @@
     {
       packages.default = config.packages.cargo-purifier;
       packages.current-stable =
-        (import ../../../nix/lib/current-stable-scope.nix {
+        (import ../../../pkgs/cargo-purifier/current-stable-scope.nix {
           inherit pkgs;
           overlay = self.overlays.default;
           rustOverlaySource = closure-inputs.rust-overlay;

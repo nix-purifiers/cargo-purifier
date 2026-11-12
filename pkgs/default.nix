@@ -10,8 +10,8 @@ let
   rust-analyzer = callPackage ./rust-analyzer { inherit cargo; };
 in
 {
-  # The builder of the purifier contract (nix/lib/build-cargo-project.nix).
-  buildCargoProject = callPackage ../nix/lib/build-cargo-project.nix {
+  # The builder of the purifier contract (pkgs/build-cargo-project/default.nix).
+  buildCargoProject = callPackage ./build-cargo-project/default.nix {
     inherit (lib) purifier;
     inherit (lib.cargo-purifier) readLock;
   };

@@ -22,9 +22,9 @@ let
 
   build = buildCargoProject;
 
-  registryUrls = import ../nix/lib/registry.nix { inherit lib; };
+  registryUrls = import ../lib-overlays/default/registry.nix { inherit lib; };
 
-  fixturePrefetch = import ../nix/lib/tool-prefetch.nix {
+  fixturePrefetch = import ../pkgs/cargo-purifier/tool-prefetch.nix {
     nixpkgs = pkgs.path;
     inherit system;
     src = ./fixtures/workspace;
@@ -434,7 +434,7 @@ realWorld
     pass "read-lock";
 
   # The release that `cargo-purifier publish` has Nix build.
-  publish-release = import ../nix/lib/tool-release.nix {
+  publish-release = import ../pkgs/cargo-purifier/tool-release.nix {
     nixpkgs = pkgs.path;
     inherit system;
     src = ./fixtures/workspace;

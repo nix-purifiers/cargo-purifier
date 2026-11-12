@@ -18,7 +18,7 @@ pkgs.runCommand name { nativeBuildInputs = [ pkgs.nix ]; } ''
   expression='
     let
       lib = import ${pkgs.path}/lib;
-      lock = import ${../nix/lib}/read-lock.nix { inherit lib; } {
+      lock = import ${../lib-overlays/default}/read-lock.nix { inherit lib; } {
         src = ${src};
         lockFile = ${lockFile};
       };

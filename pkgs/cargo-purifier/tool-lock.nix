@@ -12,7 +12,7 @@
   cargoLock ? src + "/Cargo.lock",
 }:
 let
-  lock = import ./read-lock.nix { inherit lib; } {
+  lock = import ../../lib-overlays/default/read-lock.nix { inherit lib; } {
     inherit src lockFile cargoLock;
   };
 in
