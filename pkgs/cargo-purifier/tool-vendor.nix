@@ -75,6 +75,7 @@ else
     import json, pathlib, shutil, sys
     project, stdlib, output = map(pathlib.Path, sys.argv[1:])
     shutil.copytree(project, output, symlinks=True)
+    output.chmod(0o755)
     for crate in stdlib.iterdir():
         checksum = crate / '.cargo-checksum.json'
         if not checksum.is_file():

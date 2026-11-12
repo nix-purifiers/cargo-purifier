@@ -462,5 +462,7 @@ realWorld
 
   writable-vendor = import ./writable-vendor.nix { inherit pkgs cargo-purifier; };
 
+  stdlib-vendor = import ./stdlib-vendor.nix { inherit pkgs cargo-purifier; };
+
   inherit cargo-purifier;
 }
