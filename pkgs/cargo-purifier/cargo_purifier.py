@@ -31,6 +31,7 @@ import io
 import json
 import os
 import re
+import shlex
 import shutil
 import stat
 import subprocess
@@ -1108,6 +1109,166 @@ def publish(options):
 
 
 
+_CARGO_READS = {"build", "check", "run", "test", "bench", "doc", "clippy", "rustc",
+                "rustdoc", "tree", "metadata", "package", "fix"}
+_CARGO_EDITS = {"add", "remove", "update", "generate-lockfile"}
+_CARGO_NATIVE = {"", "clean", "config", "fetch", "fmt", "help", "info", "init", "install",
+                 "locate-project", "login", "logout", "new", "owner", "publish", "purifier",
+                 "read-manifest", "report", "search", "uninstall", "vendor", "verify-project",
+                 "version", "yank"}
+
+
+def native_environment(**values):
+    environment = dict(os.environ, CARGO_PURIFIER="0")
+    if "CARGO_PURIFIER_CALLER_PATH" in environment:
+        environment['PATH'] = environment['CARGO_PURIFIER_CALLER_PATH']
+    environment.update(values)
+    return environment
+
+
+def cargo_leading_arguments(arguments):
+    """Only Cargo's own leading options belong to command discovery."""
+    result, index = [], 0
+    values = {"--config", "--color", "-C", "-Z", "--explain"}
+    while index < len(arguments):
+        value = arguments[index]
+        if not value.startswith(("-", "+")) or value == "--":
+            break
+        if value in values:
+            if index + 1 >= len(arguments):
+                raise Failure(f"missing value for Cargo option {value}")
+            if value != "--color":
+                result.extend(arguments[index:index + 2])
+            index += 2
+        else:
+            if value not in {"-q", "--quiet", "--verbose"} and not re.fullmatch(r"-v+", value) and not value.startswith("--color="):
+                result.append(value)
+            index += 1
+    return result
+
+
+def cargo_command_mode(cargo, arguments, subcommand):
+    """Classify with Cargo; Cargo still owns alias expansion and plugin dispatch."""
+    if subcommand in _CARGO_READS:
+        return "read"
+    if subcommand in _CARGO_EDITS:
+        return "edit"
+    if subcommand in _CARGO_NATIVE:
+        return "native"
+    result = subprocess.run([cargo, *cargo_leading_arguments(arguments), "--list", "--verbose"],
+                            env=native_environment(CARGO_TERM_COLOR="never"),
+                            text=True, capture_output=True, timeout=30)
+    if result.returncode:
+        raise Failure("native Cargo could not classify the delegated command: " + result.stderr.strip())
+    commands = dict(re.findall(r"^    (\S+)\s+(.+)$", result.stdout, re.MULTILINE))
+    command, visited = subcommand, set()
+    while command not in visited:
+        visited.add(command)
+        description = commands.get(command, "")
+        if description.startswith("alias: "):
+            alias = description.removeprefix("alias: ").strip()
+            if alias.startswith("!"):
+                raise Failure(f"Cargo shell alias {command!r} cannot use prepared delegation")
+            try:
+                words = shlex.split(alias)
+            except ValueError as error:
+                raise Failure(f"cannot classify Cargo alias {command!r}: {error}") from error
+            if (not words or words[0].startswith(("-", "+")) or
+                    any(word in {"--manifest-path", "--config", "-C", "-Z"} or
+                        word.startswith(("--manifest-path=", "--config=", "-Z")) for word in words)):
+                raise Failure(f"Cargo alias {command!r} changes invocation context; use the explicit command")
+            if subcommand == "rm" and words == ["remove"]:
+                return "edit"
+            command = words[0]
+            continue
+        if command in _CARGO_READS:
+            return "read"
+        if command in _CARGO_NATIVE:
+            return "native"
+        if command in _CARGO_EDITS:
+            # Alias arguments remain native, rather than being rewritten by
+            # the special built-in dependency-edit protocol below.
+            return "delegate"
+        executable = Path(description)
+        expected = "cargo-" + command + (".exe" if os.name == "nt" else "")
+        if (executable.is_absolute() and executable.name == expected and
+                executable.is_file() and os.access(executable, os.X_OK)):
+            candidates = [cargo_home() / 'bin' / expected,
+                          *(Path(path or '.') / expected for path in os.get_exec_path(native_environment()))]
+            if any(path.is_file() and os.path.samefile(path, executable) for path in candidates):
+                return "delegate"
+        raise Failure(f"native Cargo did not report a classifiable command {command!r}; no impure fallback")
+    raise Failure(f"Cargo alias cycle involving {command!r}; no command was executed")
+
+
+def delegation_configuration(directory, text):
+    """An immutable configuration per content, published without truncation."""
+    configurations = directory / 'delegated-configurations'
+    configurations.mkdir(exist_ok=True)
+    destination = configurations / (hashlib.sha256(text.encode()).hexdigest() + '.toml')
+    with tempfile.NamedTemporaryFile(mode='w', prefix='.configuration-', dir=configurations,
+                                     delete=False) as temporary:
+        temporary.write(text)
+        path = Path(temporary.name)
+    try:
+        path.replace(destination)
+    finally:
+        path.unlink(missing_ok=True)
+    return destination
+
+
+def delegated_command(root, lock_path, cargo_lock, state, cargo, arguments):
+    """Supply ordinary sources without taking ownership of a plugin's edits.
+
+    Unlike a built-in read, delegation must not restore Cargo.lock or borrowed
+    manifests after the user's command. Synthetic bindings therefore require
+    an explicit refusal, before invoking the plugin, in this first protocol.
+    """
+    if cargo_lock.resolve() != (root / "Cargo.lock").resolve():
+        raise Failure("prepared Cargo delegation requires the workspace Cargo.lock; "
+                      "external tool lockfiles are not supported for delegated mutations")
+    if "-C" in cargo_leading_arguments(arguments):
+        raise Failure("prepared Cargo delegation cannot change directory with -C; invoke it from that directory")
+    directory = root / "target/cargo-purifier"
+    directory.mkdir(parents=True, exist_ok=True)
+    vendor = Path(nix_build("tool-vendor.nix", "--arg", "src", path_arg(root),
+                            "--arg", "lockFile", path_arg(lock_path),
+                            "--arg", "cargoLock", path_arg(cargo_lock),
+                            *stdlib_vendor_args(arguments),
+                            "--out-link", str(directory / "vendor")))
+    vendor = writable_vendor(directory, vendor)
+    text = (vendor / ".cargo/config.toml").read_text().replace(
+        '"cargo-vendor-dir"', json.dumps(str(vendor))).replace('@vendor@', str(vendor))
+    configuration = delegation_configuration(directory, text)
+    if state["entries"]:
+        # Unused catalogs must not force synthetic unused-lock records. Remove
+        # only our supplied patches, then ask native Cargo whether the original
+        # manifests and lock work without any temporary bindings or hydration.
+        import tomlkit
+        document = tomlkit.parse(configuration.read_text())
+        for entry in state['entries']:
+            key = 'purifier-' + hashlib.sha256((entry['name'] + '@' + entry['version']).encode()).hexdigest()[:16]
+            patches = document.get('patch', {}).get('crates-io', {})
+            patches.pop(key, None)
+        configuration = delegation_configuration(directory, tomlkit.dumps(document))
+    environment = native_environment(CARGO_NET_OFFLINE="true",
+                                     CARGO_HOME=str(inherited_cargo_home(directory, configuration)))
+    command = [cargo, "metadata", "--manifest-path", str(root / "Cargo.toml"), "--offline", "--locked",
+               "--format-version", "1"]
+    if state['entries']:
+        command.append('--all-features')
+    validation = subprocess.run(command, env=environment, text=True, capture_output=True)
+    if validation.returncode:
+        limitation = ("; temporary synthetic Nix-provided dependency bindings are not supported"
+                      if state['entries'] else "")
+        raise Failure("the unchanged native Cargo graph cannot be delegated" + limitation +
+                      "; no plugin was executed: " + validation.stderr.strip())
+    # Cargo expands aliases, chooses the executable (including Cargo home's
+    # bin precedence), and sets its native plugin argv. No plugin flags are
+    # inserted. In particular, no finally block discards native mutations.
+    return subprocess.call([cargo, *arguments], env=environment)
+
+
 def native_command(options):
     root = Path(options.root).resolve()
     arguments = options.arguments
@@ -1115,17 +1276,20 @@ def native_command(options):
         arguments = arguments[1:]
     lock_path = lock_path_of(options, root)
     cargo_lock = cargo_lock_of(options, root)
-    edits = options.subcommand in {"add", "remove", "rm", "update", "generate-lockfile"}
+    cargo = options.native_cargo
+    mode = cargo_command_mode(cargo, arguments, options.subcommand)
+    if mode == "native":
+        return subprocess.call([cargo, *arguments], env=native_environment())
+    edits = mode == "edit"
     data = checked_lock(cargo_lock, lock_path, mutation=edits)
     adapter = input_adapter()
     state = adapter.resolve(options, root, data)
-    cargo = options.native_cargo
     subcommand = options.subcommand
-    edits = subcommand in {"add", "remove", "rm", "update", "generate-lockfile"}
-    reads = subcommand in {"build", "b", "check", "c", "run", "r", "test", "t", "bench",
-                          "doc", "d", "clippy", "rustc", "rustdoc", "tree", "metadata", "package", "fix"}
-    if not reads and not edits:
-        return subprocess.call([cargo, *arguments], env=dict(os.environ, CARGO_PURIFIER="0"))
+    if edits and "projectInputs" not in data:
+        # Legacy captures have always left native dependency editing alone.
+        return subprocess.call([cargo, *arguments], env=native_environment())
+    if mode == "delegate":
+        return delegated_command(root, lock_path, cargo_lock, state, cargo, arguments)
     with cargo_lock_in_tree(root, cargo_lock):
         if edits:
             if subcommand == "add":
