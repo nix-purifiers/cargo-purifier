@@ -466,6 +466,14 @@ When ripgrep releases a new version, move the `ripgrep` input to it, run the
 same `cargo-purifier lock` on a checkout of that version, and commit both
 files.
 
+## Captured publication sources
+
+The owning Cargo projection constructor, `pkgs/build-cargo-project/cargo-projections.nix`, accepts optional `publicationSourceArchives = [ { archive = capturedCrate; checksum = "<native registry SHA-256>"; } ];`. This is for a published registry archive that declares an optional `package.readme` file absent from that original archive. Modern Cargo can build some such archives but rejects republishing them.
+
+The projector verifies the archive checksum against the captured registry checksum, its original normalized manifest, and every captured source file. It rejects changed or added source files, inconsistent manifests, and a README lost only during vendoring. With that explicit source evidence, it omits only the absent optional readme declaration in its temporary export manifest; Cargo then authors the normalized publication, which can encode `readme = false`. Existing README files, original archives, captured vendor files, code, dependencies, features, licenses and build inputs remain intact. Missing required source, license and build files retain their native failures.
+
+The output catalog records the original archive and manifest hashes, source file hashes, omitted field and path, and export manifest hashes. The projected manifest and archive metadata change; the original artifact remains the provenance input. Ordinary exports need no additional argument. This constructor option does not acquire or resolve dependencies and is separate from uploading a crate to a public registry.
+
 ## Native library projections
 
 Packages with an explicit Cargo `cdylib` target expose `projections.native`,
