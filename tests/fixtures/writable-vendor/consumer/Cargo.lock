@@ -1,0 +1,12 @@
+version = 4
+
+[[package]]
+name = "source-write-consumer"
+version = "1.0.0"
+dependencies = ["source-generator"]
+
+[[package]]
+name = "source-generator"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0000000000000000000000000000000000000000000000000000000000000000"

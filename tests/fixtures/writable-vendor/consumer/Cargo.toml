@@ -1,0 +1,7 @@
+[package]
+name = "source-write-consumer"
+version = "1.0.0"
+edition = "2021"
+
+[dependencies]
+source-generator = "=1.0.0"

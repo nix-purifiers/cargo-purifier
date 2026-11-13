@@ -42,8 +42,17 @@ For persistent use, add these packages through your usual Nix configuration.
 
 ## Development loop
 
-The `cargo-purifier` package holds the command, a `cargo` wrapper and a
-`rust-analyzer` wrapper. In a workspace with a `cargo-purifier.lock.json`,
+The `cargo-purifier` package holds the command and a `cargo` wrapper. Local
+capture, prefetch and development use your installed Cargo and Rust tools.
+The wrapper discovers Cargo on `PATH`, skipping purifier wrappers, or uses
+`CARGO_PURIFIER_REAL_CARGO` when explicitly provided. `cargo purifier` preserves
+the invoking Cargo. Rustup proxies, project toolchain selection, and explicit
+`RUSTC` and `RUSTDOC` settings remain in effect. A missing runtime produces an
+error explaining how to provide one. There is no runtime-version allowlist;
+the selected tools enforce their actual manifest, lock-format and compiler
+requirements.
+
+In a workspace with a `cargo-purifier.lock.json`,
 the wrapper's `cargo build`, `check`, `run`, `test`, `bench`, `doc`,
 `clippy`, `rustc`, `rustdoc`, `tree`, `metadata`, `package` and `fix` read
 every registry and git source from a vendored copy that Nix builds from
@@ -233,6 +242,20 @@ of the scope on the `PATH`, for example in a development shell as
 cargo-purifier prefetch
 ```
 
+When the selected compiler has `rust-src` installed, prefetch also prepares
+the dependencies in that component's standard-library `Cargo.lock`. Builds
+using `-Zbuild-std` can then resolve those crates offline alongside the
+project's dependencies. The SDK lock stays separate from the project's locks.
+
+SDK discovery follows `RUSTC`, then native Cargo's `build.rustc` configuration
+(including `CARGO_BUILD_RUSTC` and CLI config overrides), then `rustc` on PATH.
+Prefetch with the compiler selection intended for the build. Changing the SDK
+lock invalidates the prepared sources; SDK installation remains with the
+caller's toolchain manager.
+For Cargo without configuration-inspection support, set `RUSTC` explicitly
+when preparing standard-library dependencies; ordinary Cargo use keeps its
+native compiler selection.
+
 ### One-off builds without a project Nix file
 
 For an ad hoc build, the builder can also be evaluated directly from the
@@ -309,32 +332,45 @@ minimum supported version nor a version whitelist.
 
 ## Working offline
 
-`cargo-purifier prefetch` builds, in the Nix store, everything the
-development loop and the editor need: the vendored sources, the
-`cargo-purifier` package with its cargo, rustc, C compiler and
-rust-analyzer, and the standard library's sources. It keeps them alive with
+`cargo-purifier prefetch` builds the locked vendored sources and keeps the
+local purifier tools in the Nix store. It keeps them alive with
 a garbage-collector root at `target/cargo-purifier/prefetch`, and records
 the vendored sources for the wrapper, which then needs no Nix call. After a
-prefetch, `cargo build`, `run`, `test` and rust-analyzer work with the
-network cut off.
+prefetch, `cargo build`, `run` and `test` replay those dependencies offline
+using your installed runtime. Prepare any SDK components, native libraries
+and editor tools your project needs before disconnecting.
 
 `cargo clean` removes the root with the rest of `target`, so prefetch
 again before the next stretch of offline work.
 
-The toolchain that a prefetch keeps is the Rust of the package set the
-`cargo-purifier` package was built from. A `rust-toolchain.toml` file in the
-workspace names a toolchain that rustup downloads, and cargo-purifier
-builds with the package set's Rust instead; to build with another one,
-pass it to `cargo-purifier.overrideScope`.
+Local prefetch does not substitute a Nix SDK for your runtime or keep a
+mutable host SDK alive through its garbage-collector root. The explicit
+`current-stable` profile is a convenience that supplies a packaged SDK.
+Fully sandboxed project builds separately use the builder's immutable
+`rustPlatform`, which can be replaced through the builder or scope override.
+Project SDK selection and implementation dependencies are separate: packaging
+the purifier's Python or Git helpers can require their own build tools.
+
+Build scripts use writable dependency copies in
+`$XDG_CACHE_HOME/cargo-purifier` (by default `~/.cache/cargo-purifier`). The
+copies are separate for each project and locked vendor output. Keeping them
+outside the workspace by default, with Cargo's registry cache path shape,
+lets diagnostic consumers recognize dependency source locations. The caller's
+Cargo home is left untouched. `cargo clean` keeps these source copies, as it
+does native Cargo's source cache; remove the purifier cache to discard files
+generated beside dependency sources.
+If the default home cache is not writable, the wrapper uses a private cache
+under the caller's temporary directory. An explicit `XDG_CACHE_HOME` is kept
+authoritative, including errors when it cannot be written.
 
 ## Editor
 
-Point the editor at the `rust-analyzer` of the `cargo-purifier` package,
-for example `target/cargo-purifier/prefetch/tools/bin/rust-analyzer` after
-a prefetch. It runs `cargo metadata` and `cargo check` through the cargo
-wrapper, so it loads the workspace and its dependencies from the vendored
-sources, and it reads the standard library's sources from the package
-set's rust-src.
+Use your installed `rust-analyzer` with the purifier's Cargo wrapper on its
+`PATH`, and select standard-library sources matching your SDK through your
+usual editor settings or `RUST_SRC_PATH`. The optional Nix scope package
+`pkgs.cargo-purifier.rust-analyzer` supplies an editor wrapper and the package
+set's Rust sources; choose that helper explicitly when those sources match
+your selected SDK.
 
 ## Troubleshooting
 

@@ -40,7 +40,7 @@
           inherit pkgs;
           overlay = self.overlays.default;
           rustOverlaySource = closure-inputs.rust-overlay;
-        }).scope.cargo-purifier;
+        }).tools;
     };
 
   partitionedAttrs.checks = "checks";

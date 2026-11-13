@@ -14,6 +14,7 @@
   sharedSource ? null,
   repositoryTools ? ../../tools,
   cargoLock ? src + "/Cargo.lock",
+  stdlibLock ? null,
 }:
 let
   pkgs = import nixpkgs { inherit system; };
@@ -46,21 +47,48 @@ let
         inputs = lock.projectInputs;
         inherit system;
       };
-in
-if dependencies == [ ] then
-  base
-else
-  import ../build-cargo-project/vendor-inputs.nix {
-    inherit (pkgs)
-      lib
-      runCommand
-      python3
-      cargo
-      ;
-    inherit
-      purifier
+  projectVendor =
+    if dependencies == [ ] then
       base
-      dependencies
-      repositoryTools
-      ;
-  }
+    else
+      import ../build-cargo-project/vendor-inputs.nix {
+        inherit (pkgs)
+          lib
+          runCommand
+          python3
+          cargo
+          ;
+        inherit
+          purifier
+          base
+          dependencies
+          repositoryTools
+          ;
+      };
+  stdlib = pkgs.rustPlatform.importCargoLock {
+    lockFile = if builtins.isPath stdlibLock then stdlibLock else /. + stdlibLock;
+  };
+in
+if stdlibLock == null then
+  projectVendor
+else
+  pkgs.runCommand "cargo-vendor-with-stdlib" { nativeBuildInputs = [ pkgs.python3 ]; } ''
+      python3 - ${projectVendor} ${stdlib} "$out" <<'PY'
+    import json, pathlib, shutil, sys
+    project, stdlib, output = map(pathlib.Path, sys.argv[1:])
+    shutil.copytree(project, output, symlinks=True)
+    output.chmod(0o755)
+    for crate in stdlib.iterdir():
+        checksum = crate / '.cargo-checksum.json'
+        if not checksum.is_file():
+            continue
+        destination = output / crate.name
+        if destination.exists():
+            old = json.loads((destination / '.cargo-checksum.json').read_text())
+            new = json.loads(checksum.read_text())
+            if not old.get('package') or old['package'] != new.get('package'):
+                raise SystemExit('conflicting project/SDK crate: ' + crate.name)
+        else:
+            destination.symlink_to(crate)
+    PY
+  ''

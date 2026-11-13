@@ -71,52 +71,63 @@ in
   # has a C compiler, as a developer's machine does: on darwin, stdenv also
   # brings the SDK and nixpkgs' libiconv, which the libc crate links and
   # nixpkgs' SDK leaves out.
-  ripgrep-develop = pkgs.runCommandCC "ripgrep-develop" { nativeBuildInputs = [ cargo-purifier ]; } ''
-    export HOME=$PWD/home CARGO_HOME=$PWD/cargo-home
-    export CARGO_PURIFIER_LOCKFILE=${lockFile}
-    cp -r ${src} ripgrep
-    chmod -R u+w ripgrep
-    mkdir bin
-    export PATH=$PWD/bin:$PATH
-    cat >bin/nix-build <<'EOF'
-    #!${pkgs.runtimeShell}
-    while [ $# -gt 0 ]; do
-      if [ "$1" = --out-link ]; then link=$2; fi
-      shift
-    done
-    ln -sfn ${vendor} "$link"
-    echo ${vendor}
-    EOF
-    chmod +x bin/nix-build
-    cd ripgrep
+  ripgrep-develop =
+    pkgs.runCommandCC "ripgrep-develop"
+      {
+        nativeBuildInputs = [
+          cargo-purifier
+          pkgs.cargo
+          pkgs.rustc
+          pkgs.rust-analyzer
+        ];
+      }
+      ''
+        export RUST_SRC_PATH=${pkgs.rustPlatform.rustLibSrc}
+        export HOME=$PWD/home CARGO_HOME=$PWD/cargo-home
+        export CARGO_PURIFIER_LOCKFILE=${lockFile}
+        cp -r ${src} ripgrep
+        chmod -R u+w ripgrep
+        mkdir bin
+        export PATH=$PWD/bin:$PATH
+        cat >bin/nix-build <<'EOF'
+        #!${pkgs.runtimeShell}
+        while [ $# -gt 0 ]; do
+          if [ "$1" = --out-link ]; then link=$2; fi
+          shift
+        done
+        ln -sfn ${vendor} "$link"
+        echo ${vendor}
+        EOF
+        chmod +x bin/nix-build
+        cd ripgrep
 
-    cargo build --quiet
-    cargo run --quiet -- --version | grep -q '^ripgrep 14.1.1'
-    cargo test --quiet --package grep-cli
+        cargo build --quiet
+        cargo run --quiet -- --version | grep -q '^ripgrep 14.1.1'
+        cargo test --quiet --package grep-cli
 
-    # rust-analyzer runs cargo metadata and cargo check through the
-    # wrapper, so it loads the workspace from the vendored sources.
-    rust-analyzer analysis-stats --skip-inference . >../analysis 2>&1 || {
-      cat ../analysis >&2
-      exit 1
-    }
-    # The dependencies' code is loaded only when cargo metadata resolved
-    # them from the vendored sources.
-    grep -q '^Database loaded:' ../analysis && grep -q 'dependency lines of code: [1-9]' ../analysis || {
-      cat ../analysis >&2
-      exit 1
-    }
+        # rust-analyzer runs cargo metadata and cargo check through the
+        # wrapper, so it loads the workspace from the vendored sources.
+        rust-analyzer analysis-stats --skip-inference . >../analysis 2>&1 || {
+          cat ../analysis >&2
+          exit 1
+        }
+        # The dependencies' code is loaded only when cargo metadata resolved
+        # them from the vendored sources.
+        grep -q '^Database loaded:' ../analysis && grep -q 'dependency lines of code: [1-9]' ../analysis || {
+          cat ../analysis >&2
+          exit 1
+        }
 
-    # A dependency added to Cargo.toml but not yet locked.
-    sed -i 's/^\[dependencies\]$/[dependencies]\nsmallvec = "1"/' Cargo.toml
-    if cargo build --quiet 2>../stderr; then
-      echo "cargo built offline with a dependency Cargo.lock lacks" >&2
-      exit 1
-    fi
-    grep -qF 'Run `cargo-purifier lock` to lock them' ../stderr || {
-      cat ../stderr >&2
-      exit 1
-    }
-    touch $out
-  '';
+        # A dependency added to Cargo.toml but not yet locked.
+        sed -i 's/^\[dependencies\]$/[dependencies]\nsmallvec = "1"/' Cargo.toml
+        if cargo build --quiet 2>../stderr; then
+          echo "cargo built offline with a dependency Cargo.lock lacks" >&2
+          exit 1
+        fi
+        grep -qF 'Run `cargo-purifier lock` to lock them' ../stderr || {
+          cat ../stderr >&2
+          exit 1
+        }
+        touch $out
+      '';
 }

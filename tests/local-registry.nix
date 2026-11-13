@@ -19,6 +19,8 @@ pkgs.runCommand "local-registry"
       cargo-purifier
       pkgs.cargo
       pkgs.rustc
+      pkgs.cargo
+      pkgs.rustc
       pkgs.git
       pkgs.python3
       # nix-prefetch-git hashes with the nix-hash on the PATH.

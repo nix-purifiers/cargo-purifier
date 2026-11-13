@@ -451,11 +451,24 @@ realWorld
   };
 
   # The parsing, URL, lockfile and publish logic of `cargo-purifier`.
-  unit = pkgs.runCommand "unit" { nativeBuildInputs = [ pkgs.python3 ]; } ''
-    cp ${./test_cargo_purifier.py} test_cargo_purifier.py
-    PYTHONPATH=${../pkgs/cargo-purifier} python3 -m unittest -v test_cargo_purifier
-    touch $out
-  '';
+  unit =
+    pkgs.runCommand "unit"
+      {
+        nativeBuildInputs = [
+          pkgs.nix
+          pkgs.rustc
+          (pkgs.python3.withPackages (python: [ python.tomlkit ]))
+        ];
+      }
+      ''
+        cp ${./test_cargo_purifier.py} test_cargo_purifier.py
+        PYTHONPATH=${../pkgs/cargo-purifier} python3 -m unittest -v test_cargo_purifier
+        touch $out
+      '';
+
+  writable-vendor = import ./writable-vendor.nix { inherit pkgs cargo-purifier; };
+
+  stdlib-vendor = import ./stdlib-vendor.nix { inherit pkgs cargo-purifier; };
 
   inherit cargo-purifier;
 }
