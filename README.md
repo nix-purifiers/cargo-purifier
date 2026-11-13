@@ -60,6 +60,34 @@ the two lockfiles, and run with `--offline`. Incremental compilation works
 as usual. In projects with Nix inputs, `add`, `remove` and `update` also
 resolve against those inputs. Run `cargo-purifier lock` after changing dependencies.
 
+Installed Cargo plugins, such as `cargo nextest run`, also receive the prepared
+sources. Your Cargo still selects and invokes the plugin, with its original
+arguments, SDK and search path. Native Cargo calls made by the plugin inherit a
+private Cargo home with the locked source configuration; the caller's Cargo
+home and installed plugins remain available. No plugin or SDK is installed by
+this delegation.
+
+Plugin edits to workspace manifests and `Cargo.lock`, and the native exit
+status, are preserved. The purifier does not silently refresh its capture after
+an edit: run `cargo-purifier lock` before the next locked operation. Commands
+that manage Cargo itself, such as `fmt`, `clean`, `install` and `publish`, retain
+their native behavior. Plugins that manage Cargo-global configuration or SDKs
+should likewise be run explicitly with plain Cargo, rather than treating the
+private prepared home as the caller's global configuration.
+
+Ordinary Cargo aliases are classified through the selected Cargo and expanded
+by Cargo itself. Shell aliases, alias cycles and aliases that change invocation
+context are refused before their bodies run; invoke the explicit command from
+the intended workspace instead. Cargo's own command-line configuration behavior
+is retained, including which settings its external subcommands inherit.
+
+Delegation currently refuses workspaces that actually require temporary
+synthetic bindings for Nix-provided crates. An unused Nix catalog alone does not
+prevent delegation. The provided-input check examines the full feature graph;
+if Cargo cannot classify that graph, delegation reports the native diagnostic
+without executing the plugin. External tool lockfiles are also outside this
+delegation protocol. Built-in Nix-input operations described above are unchanged.
+
 To add a dependency, run `cargo add`, then `cargo-purifier lock`. To
 upgrade, run `cargo-purifier update`, which runs `cargo update` for every
 package, or for the packages it names, and then locks the result. Commit
