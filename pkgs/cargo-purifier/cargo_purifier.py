@@ -373,6 +373,36 @@ def input_state(options, root, previous):
     return saved if saved is not None else input_adapter().resolve(options, root, previous)
 
 
+def capture_package_locks(root, cargo, manifest, cargo_lock):
+    """Capture Cargo's real normalized archive locks, never relabel Git bytes."""
+    with cargo_lock_in_tree(root, cargo_lock), tempfile.TemporaryDirectory(prefix="cargo-package-inputs-") as temporary:
+        selected_lock = (root / "Cargo.lock").read_bytes()
+        target = Path(temporary)
+        subprocess.run([cargo, "package", "--no-verify", "--allow-dirty", "--workspace",
+                        "--manifest-path", manifest], cwd=root,
+                       env=native_environment(CARGO_TARGET_DIR=str(target)), check=True)
+        result = {}
+        for archive in sorted((target / "package").glob("*.crate")):
+            with tarfile.open(archive, "r:gz") as source:
+                locks = [entry for entry in source.getmembers()
+                         if entry.isfile() and len(Path(entry.name).parts) == 2
+                         and Path(entry.name).name == "Cargo.lock"]
+                if len(locks) != 1:
+                    raise Failure(f"native package {archive.name} has no unique Cargo.lock")
+                text = source.extractfile(locks[0]).read().decode()
+                for package in tomllib.loads(text).get("package", []):
+                    identity = package.get("source", "")
+                    if identity and (not identity.startswith(("registry+", "sparse+"))
+                                     or not package.get("checksum")):
+                        raise Failure(f"native package {archive.name} has an uncaptured package source")
+                result[archive.name] = text
+        if not result:
+            raise Failure("native Cargo produced no package archives to capture")
+        if (root / "Cargo.lock").read_bytes() != selected_lock:
+            raise Failure("native package capture changed the selected Cargo.lock")
+        return result
+
+
 def lock(options):
     root, root_manifest = workspace_root(options.manifest_path)
     workspace = ["--manifest-path", root_manifest]
@@ -479,6 +509,18 @@ def lock(options):
     }
     if state is not None and state['inputs']:
         result['projectInputs'] = state['inputs']
+    if getattr(options, "package_inputs", False) or previous.get("packageCargoLocks"):
+        if state is not None and state["inputs"]:
+            raise Failure("package input capture with projected Nix inputs is not supported; use the projected release")
+        result["packageCargoLocks"] = capture_package_locks(root, cargo, root_manifest, cargo_lock_path)
+        for text in result["packageCargoLocks"].values():
+            for package in tomllib.loads(text).get("package", []):
+                source = package.get("source", "")
+                if source.startswith(("registry+", "sparse+")) and source != CRATES_IO_SOURCE:
+                    if source not in result["registries"]:
+                        result["registries"][source] = {"dl": index_config(source, config)["dl"]}
+        if cargo_lock_path.read_bytes() != cargo_lock_bytes:
+            raise Failure("native package capture changed Cargo.lock; run cargo-purifier lock again")
     result["contentHash"] = content_hash(result)
     lock_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
     if state is not None:
@@ -716,6 +758,25 @@ def stdlib_metadata(subcommand, arguments):
         elif argument.startswith('--manifest-path='):
             manifest = Path(argument.split('=', 1)[1])
     return manifest is not None and manifest.resolve() == (lock.parent / 'Cargo.toml').resolve()
+
+
+def vendor_configuration(vendor):
+    """Bind every directory source with TOML escaping, including nested sources."""
+    import tomlkit
+
+    vendor = Path(vendor).resolve()
+    document = tomlkit.parse((vendor / ".cargo/config.toml").read_text())
+    for source in document.get("source", {}).values():
+        directory = source.get("directory")
+        if not isinstance(directory, str):
+            continue
+        if directory == "cargo-vendor-dir":
+            source["directory"] = str(vendor)
+        elif directory.startswith("cargo-vendor-dir/"):
+            source["directory"] = str(vendor / directory.removeprefix("cargo-vendor-dir/"))
+        elif "@vendor@" in directory:
+            source["directory"] = directory.replace("@vendor@", str(vendor))
+    return tomlkit.dumps(document)
 
 
 def vendor_stamp(cargo_lock, lock_path, arguments=()):
@@ -1237,8 +1298,7 @@ def delegated_command(root, lock_path, cargo_lock, state, cargo, arguments):
                             *stdlib_vendor_args(arguments),
                             "--out-link", str(directory / "vendor")))
     vendor = writable_vendor(directory, vendor)
-    text = (vendor / ".cargo/config.toml").read_text().replace(
-        '"cargo-vendor-dir"', json.dumps(str(vendor))).replace('@vendor@', str(vendor))
+    text = vendor_configuration(vendor)
     configuration = delegation_configuration(directory, text)
     if state["entries"]:
         # Unused catalogs must not force synthetic unused-lock records. Remove
@@ -1340,9 +1400,7 @@ def native_command(options):
             "--out-link", str(directory / "vendor")))
         vendor = writable_vendor(directory, vendor)
         configuration = directory / "config.toml"
-        configuration.write_text((vendor / ".cargo/config.toml").read_text()
-                                 .replace('"cargo-vendor-dir"', json.dumps(str(vendor)))
-                                 .replace('@vendor@', str(vendor)))
+        configuration.write_text(vendor_configuration(vendor))
         from cargo_inputs import borrowed_manifests, hydrate_lock
         saved = (root / "Cargo.lock").read_bytes()
         try:
@@ -1389,6 +1447,11 @@ def main(argv):
             raise Failure("_writable-vendor needs a state directory and vendor directory")
         print(writable_vendor(args[1], args[2]))
         return 0
+    if args and args[0] == "_vendor-configuration":
+        if len(args) != 2:
+            raise Failure("_vendor-configuration needs a vendor directory")
+        print(vendor_configuration(args[1]), end="")
+        return 0
     if args and args[0] == "_inherited-cargo-home":
         if len(args) != 3:
             raise Failure("_inherited-cargo-home needs a state directory and Cargo config path")
@@ -1400,6 +1463,8 @@ def main(argv):
     parser = argparse.ArgumentParser(prog="cargo-purifier", description=__doc__.splitlines()[0])
     commands = parser.add_subparsers(dest="command", required=True)
     locker = commands.add_parser("lock", help="write cargo-purifier.lock.json, keeping cargo's resolution")
+    locker.add_argument("--package-inputs", action="store_true",
+                        help="also capture genuine Cargo package-normalized registry dependency locks")
     updater = commands.add_parser("update", help="`cargo update` every package or the named ones, then lock")
     updater.add_argument("packages", nargs="*", help="the packages to update; all of them by default")
     fetcher = commands.add_parser("prefetch", help="build what the development loop and the editor need, for offline work")

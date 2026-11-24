@@ -83,8 +83,8 @@ def prepare_vendor(base, views, out, cargo):
         environment = dict(os.environ, CARGO_PURIFIER='0', CARGO_HOME=str(Path(temporary) / 'home'))
         selector = VersionSelector(cargo, environment, Path(temporary) / 'selectors')
         candidates = candidates_of(entries)
-        for source in out.iterdir():
-            manifest = source / 'Cargo.toml'
+        manifests = list(out.glob('*/Cargo.toml')) + list(out.glob('.package-registries/*/*/Cargo.toml'))
+        for manifest in manifests:
             if not manifest.is_file():
                 continue
             document = tomlkit.parse(manifest.read_text())
@@ -96,15 +96,42 @@ def prepare_vendor(base, views, out, cargo):
             write_document(manifest, document)
     config = tomlkit.parse((base / '.cargo/config.toml').read_text())
     sources = config.setdefault('source', tomlkit.table())
-    names = [name for name, table in sources.items() if 'directory' in table]
-    replacement = names[0] if names else 'purifier-inputs'
-    for name, table in list(sources.items()):
-        if table.get('replace-with') in names:
-            table['replace-with'] = replacement
-        if name in names and name != replacement:
-            del sources[name]
-    sources.setdefault('crates-io', tomlkit.table())['replace-with'] = replacement
-    sources[replacement] = {'directory': '@vendor@'}
+    # Keep registry/Git replacement chains distinct. Supplied crates belong
+    # to the explicit crates.io patch namespace, not every source directory.
+    current, visited = 'crates-io', set()
+    destination = None
+    while current not in visited:
+        visited.add(current)
+        table = sources.get(current, {})
+        if 'directory' in table:
+            value = str(table['directory'])
+            if value == 'cargo-vendor-dir':
+                destination = out
+            elif value.startswith('cargo-vendor-dir/'):
+                destination = out / value.removeprefix('cargo-vendor-dir/')
+            else:
+                destination = Path(value.replace('@vendor@', str(out)))
+            break
+        current = table.get('replace-with')
+        if not current:
+            break
+    if destination is None:
+        sources.setdefault('crates-io', tomlkit.table())['replace-with'] = 'purifier-inputs'
+        sources['purifier-inputs'] = {'directory': '@vendor@/.provided-registry'}
+        destination = out / '.provided-registry'
+    if not destination.resolve().is_relative_to(out.resolve()):
+        raise ValueError('provided registry namespace escapes vendor output')
+    destination.mkdir(parents=True, exist_ok=True)
+    for entry in entries:
+        name = entry['name'] + '-' + entry['version']
+        source, target = out / name, destination / name
+        if source != target:
+            if target.exists():
+                actual = json.loads((target / '.cargo-checksum.json').read_text()).get('package')
+                if actual != entry['checksum']:
+                    raise ValueError('conflicting provided registry crate: ' + name)
+            else:
+                target.symlink_to(os.path.relpath(source, destination))
     patches = config.setdefault('patch', tomlkit.table()).setdefault('crates-io', tomlkit.table())
     for entry in entries:
         alias = 'purifier-' + hashlib.sha256((entry['name'] + '@' + entry['version']).encode()).hexdigest()[:16]

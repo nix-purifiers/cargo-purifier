@@ -28,6 +28,8 @@
   # The entries of the workspace's lock in memory.
   entries,
   provided ? [ ],
+  packageCargoLocks ? { },
+  python3 ? null,
 }:
 let
   inherit (builtins) toJSON;
@@ -142,33 +144,77 @@ let
   # The `registry` value of a source replacement: the index URL, which
   # keeps the `sparse+` prefix and drops `registry+`.
   indexOf = lib.removePrefix "registry+";
+  base = runCommand "cargo-vendor-dir" { } ''
+    mkdir -p $out/.cargo
+    for entry in ${imported}/*; do
+      ln -s "$entry" "$out/$(basename "$entry")"
+    done
+    rm $out/Cargo.lock
+    ln -s ${cargoLock} $out/Cargo.lock
+    cp ${imported}/.cargo/config.toml $out/.cargo/config.toml
+    chmod u+w $out/.cargo/config.toml
+
+    ${lib.concatMapStrings (rewrite: ''
+      substituteInPlace $out/.cargo/config.toml \
+        --replace-fail ${lib.escapeShellArg "\"git+${rewrite.fetched}"} ${lib.escapeShellArg "\"git+${rewrite.original}"} \
+        --replace-fail ${lib.escapeShellArg "git = \"${rewrite.fetched}\""} ${lib.escapeShellArg "git = \"${rewrite.original}\""}
+    '') rewrites}
+
+    ${lib.concatMapStrings (entry: ''
+      ln -s ${registryCrate entry} $out/${entry.path}
+    '') registryEntries}
+
+    ${lib.concatMapStrings (source: ''
+      cat >>$out/.cargo/config.toml <<'EOF'
+
+      [source.${toJSON source}]
+      registry = ${toJSON (indexOf source)}
+      replace-with = "vendored-sources"
+      EOF
+    '') registrySources}
+  '';
+  packageVendors = lib.mapAttrsToList (
+    name: text:
+    let
+      packageLock = builtins.toFile "${name}-Cargo.lock" text;
+      vendor = import ./vendor.nix {
+        inherit
+          lib
+          rustPlatform
+          fetchurl
+          fetchgit
+          runCommand
+          entries
+          ;
+        cargoLock = packageLock;
+      };
+    in
+    {
+      lock = packageLock;
+      inherit vendor;
+    }
+  ) packageCargoLocks;
+  inputs = toJSON (
+    [
+      {
+        lock = cargoLock;
+        vendor = base;
+      }
+    ]
+    ++ packageVendors
+  );
 in
-runCommand "cargo-vendor-dir" { } ''
-  mkdir -p $out/.cargo
-  for entry in ${imported}/*; do
-    ln -s "$entry" "$out/$(basename "$entry")"
-  done
-  rm $out/Cargo.lock
-  ln -s ${cargoLock} $out/Cargo.lock
-  cp ${imported}/.cargo/config.toml $out/.cargo/config.toml
-  chmod u+w $out/.cargo/config.toml
-
-  ${lib.concatMapStrings (rewrite: ''
-    substituteInPlace $out/.cargo/config.toml \
-      --replace-fail ${lib.escapeShellArg "\"git+${rewrite.fetched}"} ${lib.escapeShellArg "\"git+${rewrite.original}"} \
-      --replace-fail ${lib.escapeShellArg "git = \"${rewrite.fetched}\""} ${lib.escapeShellArg "git = \"${rewrite.original}\""}
-  '') rewrites}
-
-  ${lib.concatMapStrings (entry: ''
-    ln -s ${registryCrate entry} $out/${entry.path}
-  '') registryEntries}
-
-  ${lib.concatMapStrings (source: ''
-    cat >>$out/.cargo/config.toml <<'EOF'
-
-    [source.${toJSON source}]
-    registry = ${toJSON (indexOf source)}
-    replace-with = "vendored-sources"
-    EOF
-  '') registrySources}
-''
+if packageCargoLocks == { } && gitPackages == [ ] then
+  base
+else if python3 == null then
+  throw "cargo-purifier: package input vendoring requires python3"
+else
+  runCommand "cargo-vendor-source-identities"
+    {
+      nativeBuildInputs = [ (python3.withPackages (p: [ p.tomlkit ])) ];
+      request = inputs;
+      passAsFile = [ "request" ];
+    }
+    ''
+      python3 ${./package_vendor.py} "$requestPath" "$out"
+    ''

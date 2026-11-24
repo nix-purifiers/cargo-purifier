@@ -191,8 +191,7 @@ writeShellApplication {
     # silently disables vendoring and makes its offline resolution fail.
     config=$(mktemp "$state/config.XXXXXX")
     trap 'rm -f "$config"' EXIT
-    sed "s|^directory = \"cargo-vendor-dir\"\$|directory = \"$vendor\"|" \
-      "$vendor/.cargo/config.toml" >"$config"
+    ${lib.getExe command} _vendor-configuration "$vendor" >"$config"
     mv -f "$config" "$state/config.toml"
     trap - EXIT
 

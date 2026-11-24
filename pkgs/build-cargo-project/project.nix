@@ -76,6 +76,8 @@ let
       cargoLock
       ;
     provided = lock.provided or [ ];
+    packageCargoLocks = lock.packageCargoLocks or { };
+    python3 = python3;
   };
 
   vendor =

@@ -462,7 +462,7 @@ realWorld
       }
       ''
         cp ${./test_cargo_purifier.py} test_cargo_purifier.py
-        PYTHONPATH=${../pkgs/cargo-purifier} python3 -m unittest -v test_cargo_purifier
+        PYTHONPATH=${../pkgs/cargo-purifier}:${../pkgs/build-cargo-project}:${../tools} python3 -m unittest -v test_cargo_purifier
         touch $out
       '';
 

@@ -718,5 +718,169 @@ class StandardLibraryVendor(unittest.TestCase):
             self.assertEqual(lock.read_text(), 'project-purifier-lock')
 
 
+
+
+class PackageSourceIdentity(unittest.TestCase):
+    def test_legacy_git_directory_is_rebased_for_nix_setup_hook(self):
+        import package_vendor
+        import tomllib
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            git = self.fixture(root, 'git', 'GIT CONTENT', None)
+            config = git / '.cargo/config.toml'
+            config.write_text(config.read_text().replace('directory="@vendor@"', 'directory="cargo-vendor-dir"'))
+            lock = root / 'Cargo.lock'
+            lock.write_text('[[package]]\nname="identity"\nversion="1.0.0"\nsource="git+file:///fixture#rev"\n')
+            output = root / 'renamed-vendor'
+            package_vendor.merge([{'vendor': str(git), 'lock': str(lock)}], output)
+            text = (output / '.cargo/config.toml').read_text()
+            sources = tomllib.loads(text.replace('@vendor@', str(output)))['source']
+            target = sources[sources['git+file:///fixture']['replace-with']]['directory']
+            self.assertEqual(Path(target), output)
+            self.assertEqual((Path(target) / 'identity-1.0.0/lib.rs').read_text(), 'GIT CONTENT')
+
+    def test_repository_supplier_merge_preserves_source_namespaces(self):
+        import package_vendor
+        import cargo_inputs
+        import tomllib
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            git = self.fixture(root, 'git', 'GIT CONTENT', None)
+            lock = root / 'Cargo.lock'
+            lock.write_text('[[package]]\nname="identity"\nversion="1.0.0"\nsource="git+file:///fixture#rev"\n')
+            project = root / 'project'
+            package_vendor.merge([{'vendor': str(git), 'lock': str(lock)}], project)
+            (project / 'Cargo.lock').write_bytes(lock.read_bytes())
+            original = tomllib.loads((project / '.cargo/config.toml').read_text())['source']
+            output = root / 'provided'
+            cargo_inputs.prepare_vendor(project, [], output, '/unused/no-selector-call')
+            actual = tomllib.loads((output / '.cargo/config.toml').read_text())['source']
+            self.assertEqual(actual, original)
+            registry = package_vendor.source_directory({'source': actual}, 'crates-io', output)
+            self.assertEqual(list(registry.iterdir()), [])
+            self.assertEqual((output / 'identity-1.0.0/lib.rs').read_text(), 'GIT CONTENT')
+
+    def test_sdk_registry_crate_is_added_to_nested_namespace_not_git_directory(self):
+        import package_vendor
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            git = self.fixture(root, 'git', 'GIT CONTENT', None)
+            lock = root / 'Cargo.lock'
+            lock.write_text('[[package]]\nname="identity"\nversion="1.0.0"\nsource="git+file:///fixture#rev"\n')
+            project = root / 'project'
+            package_vendor.merge([{'vendor': str(git), 'lock': str(lock)}], project)
+            sdk = self.fixture(root, 'sdk', 'SDK REGISTRY CONTENT', 'b' * 64)
+            output = root / 'combined'
+            package_vendor.merge_stdlib(project, sdk, output)
+            import tomllib
+            config = tomllib.loads((output / '.cargo/config.toml').read_text())
+            registry = package_vendor.source_directory(config, 'crates-io', output)
+            self.assertEqual((registry / 'identity-1.0.0/lib.rs').read_text(), 'SDK REGISTRY CONTENT')
+            self.assertEqual((output / 'identity-1.0.0/lib.rs').read_text(), 'GIT CONTENT')
+
+    def test_git_only_capture_has_empty_registry_replacement(self):
+        import package_vendor
+        import tomllib
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            git = self.fixture(root, 'git', 'GIT CONTENT', None)
+            lock = root / 'Cargo.lock'
+            lock.write_text('[[package]]\nname="identity"\nversion="1.0.0"\nsource="git+file:///fixture#rev"\n')
+            output = root / 'output'
+            package_vendor.merge([{'vendor': str(git), 'lock': str(lock)}], output)
+            sources = tomllib.loads((output / '.cargo/config.toml').read_text())['source']
+            target = sources[sources['crates-io']['replace-with']]['directory'].replace('@vendor@', str(output))
+            self.assertEqual(list(Path(target).iterdir()), [])
+            self.assertEqual((output / 'identity-1.0.0/lib.rs').read_text(), 'GIT CONTENT')
+
+    def test_shared_binding_expands_nested_sources_and_escapes_paths(self):
+        import tomllib
+        with tempfile.TemporaryDirectory() as temporary:
+            vendor = Path(temporary) / 'quoted " path | with backslash \\'
+            (vendor / '.cargo').mkdir(parents=True)
+            (vendor / '.cargo/config.toml').write_text(
+                '[source.flat]\ndirectory="cargo-vendor-dir"\n'
+                '[source.nested]\ndirectory="@vendor@/.package-registries/example"\n'
+                '[source.other]\nregistry="https://example.invalid/@vendor@"\n')
+            bound = tomllib.loads(cargo_purify.vendor_configuration(vendor))['source']
+            self.assertEqual(bound['flat']['directory'], str(vendor.resolve()))
+            self.assertEqual(bound['nested']['directory'], str(vendor.resolve() / '.package-registries/example'))
+            self.assertEqual(bound['other']['registry'], 'https://example.invalid/@vendor@')
+
+    def test_package_capture_uses_external_lock_and_restores_workspace_lock(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = root / 'project'
+            project.mkdir()
+            original = b'version=4\n# original workspace lock\n'
+            selected = b'version=4\n# selected external lock\n'
+            (project / 'Cargo.lock').write_bytes(original)
+            external = root / 'external.lock'
+            external.write_bytes(selected)
+
+            def native_package(command, cwd, env, check):
+                self.assertEqual((project / 'Cargo.lock').read_bytes(), selected)
+                target = Path(env['CARGO_TARGET_DIR']) / 'package'
+                target.mkdir()
+                with tarfile.open(target / 'fixture-1.0.0.crate', 'w:gz') as archive:
+                    info = tarfile.TarInfo('fixture-1.0.0/Cargo.lock')
+                    info.size = len(selected)
+                    archive.addfile(info, io.BytesIO(selected))
+
+            with mock.patch.object(cargo_purify.subprocess, 'run', side_effect=native_package):
+                captured = cargo_purify.capture_package_locks(project, '/selected/cargo',
+                                                              str(project / 'Cargo.toml'), external)
+            self.assertEqual(captured, {'fixture-1.0.0.crate': selected.decode()})
+            self.assertEqual(external.read_bytes(), selected)
+            self.assertEqual((project / 'Cargo.lock').read_bytes(), original)
+
+    def fixture(self, root, name, marker, checksum):
+        vendor = root / name
+        vendor.mkdir()
+        (vendor / '.cargo').mkdir()
+        (vendor / '.cargo/config.toml').write_text(
+            '[source.crates-io]\nreplace-with="vendored-sources"\n'
+            '[source.vendored-sources]\ndirectory="@vendor@"\n'
+            '[source."git+file:///fixture"]\ngit="file:///fixture"\nreplace-with="vendored-sources"\n')
+        crate = vendor / 'identity-1.0.0'
+        crate.mkdir()
+        (crate / 'Cargo.toml').write_text('[package]\nname="identity"\nversion="1.0.0"\n')
+        (crate / 'lib.rs').write_text(marker)
+        (crate / '.cargo-checksum.json').write_text(json.dumps({'files': {}, 'package': checksum}))
+        return vendor
+
+    def test_competing_git_and_registry_bytes_are_routed_separately(self):
+        import package_vendor
+        import tomllib
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            git = self.fixture(root, 'git', 'GIT CONTENT', None)
+            registry = self.fixture(root, 'registry', 'REGISTRY CONTENT', 'a' * 64)
+            original = root / 'original.lock'
+            original.write_text('[[package]]\nname="identity"\nversion="1.0.0"\nsource="git+file:///fixture#rev"\n')
+            normalized = root / 'normalized.lock'
+            normalized.write_text('[[package]]\nname="identity"\nversion="1.0.0"\n'
+                                  'source="registry+https://github.com/rust-lang/crates.io-index"\nchecksum="' + 'a' * 64 + '"\n')
+            output = root / 'output'
+            package_vendor.merge([{'vendor': str(git), 'lock': str(original)},
+                                  {'vendor': str(registry), 'lock': str(normalized)}], output)
+            config = tomllib.loads((output / '.cargo/config.toml').read_text())['source']
+            registry_directory = config[config['crates-io']['replace-with']]['directory'].replace('@vendor@', str(output))
+            self.assertEqual((Path(registry_directory) / 'identity-1.0.0/lib.rs').read_text(), 'REGISTRY CONTENT')
+            self.assertEqual((output / 'identity-1.0.0/lib.rs').read_text(), 'GIT CONTENT')
+            self.assertEqual(config['git+file:///fixture']['replace-with'], 'vendored-sources')
+
+    def test_git_bytes_cannot_stand_in_for_missing_registry_artifact(self):
+        import package_vendor
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            git = self.fixture(root, 'git', 'GIT CONTENT', None)
+            normalized = root / 'normalized.lock'
+            normalized.write_text('[[package]]\nname="identity"\nversion="1.0.0"\n'
+                                  'source="registry+https://github.com/rust-lang/crates.io-index"\nchecksum="' + 'a' * 64 + '"\n')
+            with self.assertRaisesRegex(ValueError, 'no authentic registry artifact'):
+                package_vendor.merge([{'vendor': str(git), 'lock': str(normalized)}], root / 'output')
+
+
 if __name__ == "__main__":
     unittest.main()

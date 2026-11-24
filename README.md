@@ -57,7 +57,19 @@ the wrapper's `cargo build`, `check`, `run`, `test`, `bench`, `doc`,
 `clippy`, `rustc`, `rustdoc`, `tree`, `metadata`, `package` and `fix` read
 every registry and git source from a vendored copy that Nix builds from
 the two lockfiles, and run with `--offline`. Incremental compilation works
-as usual. In projects with Nix inputs, `add`, `remove` and `update` also
+as usual.
+
+For a package that publishes Git dependencies as versioned registry dependencies,
+run `cargo-purifier lock --package-inputs` after preparing the files to package.
+This also runs native Cargo packaging without verification and captures the real
+normalized archive locks. Nix fetches those registry artifacts by their own
+checksums; packaging keeps them separate from Git sources with the same name and
+version. Registry resolution never borrows Git bytes. If packaging needs a registry
+artifact the capture lacks, native Cargo stops; this flag captures those inputs.
+Subsequent locks recapture them. This opt-in capture does not support projected
+Nix inputs, whose release uses the projection workflow.
+
+In projects with Nix inputs, `add`, `remove` and `update` also
 resolve against those inputs. Run `cargo-purifier lock` after changing dependencies.
 
 Installed Cargo plugins, such as `cargo nextest run`, also receive the prepared

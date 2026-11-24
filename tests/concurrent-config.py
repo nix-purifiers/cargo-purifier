@@ -45,8 +45,9 @@ def main():
         worktree = Path(subprocess.check_output(
             [str(args.tools / 'bin/cargo-purifier'), '_writable-vendor', str(state), str(vendor)],
             cwd=project, env=environment, text=True).strip())
-        original = template.replace('directory = "cargo-vendor-dir"',
-                                    f'directory = "{worktree}"').encode()
+        original = subprocess.check_output(
+            [str(args.tools / 'bin/cargo-purifier'), '_vendor-configuration', str(worktree)],
+            cwd=project, env=environment)
         config.write_bytes(original)
         reader = [str(args.cargo), '--config', str(config), 'metadata',
                   '--offline', '--locked', '--format-version', '1']
@@ -78,7 +79,7 @@ def main():
                     if time.monotonic() > deadline:
                         raise AssertionError('wrapper did not reach config generation')
                     time.sleep(0.01)
-            # Opening the FIFO proves sed has started, after its output file
+            # Opening the FIFO proves config binding has started, after its output file
             # was opened. No timing guess controls the competing reader.
             visible = config.read_bytes()
             during = read_graph()
