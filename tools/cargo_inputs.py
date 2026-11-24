@@ -13,6 +13,7 @@ import tomllib
 
 import tomlkit
 
+from cargo_config import vendor_configuration
 from cargo_graph import VersionSelector
 from cargo_repository import dependency_tables, bind_supplied, crate_manifest, extract_crate, writable_copy, write_document
 
@@ -180,9 +181,7 @@ def materialize(root, vendor, cargo, check=True):
         lock = root / 'Cargo.lock'
         lock.write_bytes(lock_checksums(lock.read_bytes(), entries))
         configuration = temporary / 'config.toml'
-        configuration.write_text((vendor / '.cargo/config.toml').read_text()
-                                 .replace('"cargo-vendor-dir"', json.dumps(str(vendor)))
-                                 .replace('@vendor@', str(vendor)))
+        configuration.write_text(vendor_configuration(vendor))
         hydrate_lock(root, vendor, cargo, configuration, entries, check)
 
 

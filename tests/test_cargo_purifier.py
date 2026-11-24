@@ -833,6 +833,10 @@ class PackageSourceIdentity(unittest.TestCase):
             self.assertEqual(bound['source']['remote']['registry'], registry)
             self.assertEqual(bound['source']['git']['git'], registry + '/repo')
             self.assertEqual(bound['registries']['mirror @vendor@']['index'], 'sparse+' + registry)
+            import cargo_inputs
+            import cargo_repository
+            for binder in (cargo_inputs.vendor_configuration, cargo_repository.vendor_configuration):
+                self.assertEqual(tomllib.loads(binder(vendor)), bound)
             patches = bound['patch'][registry]
             self.assertEqual(patches['provided'], {'package': 'identity', 'path': package_path.replace('@vendor@', str(vendor))})
             self.assertEqual(patches['legacy']['path'], str(vendor / 'legacy'))

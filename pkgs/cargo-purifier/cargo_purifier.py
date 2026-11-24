@@ -348,12 +348,16 @@ def workspace_root(manifest_path):
     return Path(root_manifest).parent, root_manifest
 
 
-def input_adapter():
+def repository_tools():
     directory = os.environ.get("CARGO_PURIFIER_TOOLS_DIR")
     if directory is None:
         directory = str(Path(__file__).resolve().parents[2] / "tools")
     if directory not in sys.path:
         sys.path.insert(0, directory)
+
+
+def input_adapter():
+    repository_tools()
     import cargo_cli_inputs
     return cargo_cli_inputs
 
@@ -761,34 +765,9 @@ def stdlib_metadata(subcommand, arguments):
 
 
 def vendor_configuration(vendor):
-    """Bind local source and dependency paths without changing source identities."""
-    import tomlkit
-    from collections.abc import Mapping
-
-    vendor = Path(vendor).resolve()
-    document = tomlkit.parse((vendor / ".cargo/config.toml").read_text())
-
-    def bind(path):
-        if not isinstance(path, str):
-            return path
-        if path == "cargo-vendor-dir":
-            return str(vendor)
-        if path.startswith("cargo-vendor-dir/"):
-            return str(vendor / path.removeprefix("cargo-vendor-dir/"))
-        return path.replace("@vendor@", str(vendor))
-
-    for source in document.get("source", {}).values():
-        for key in ("directory", "local-registry"):
-            if key in source:
-                source[key] = bind(source[key])
-    for patches in document.get("patch", {}).values():
-        for dependency in patches.values():
-            if isinstance(dependency, Mapping) and "path" in dependency:
-                dependency["path"] = bind(dependency["path"])
-    if "paths" in document:
-        for index, path in enumerate(document["paths"]):
-            document["paths"][index] = bind(path)
-    return tomlkit.dumps(document)
+    repository_tools()
+    from cargo_config import vendor_configuration as bind
+    return bind(vendor)
 
 
 def vendor_stamp(cargo_lock, lock_path, arguments=()):
