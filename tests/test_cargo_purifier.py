@@ -807,6 +807,38 @@ class PackageSourceIdentity(unittest.TestCase):
             self.assertEqual(bound['nested']['directory'], str(vendor.resolve() / '.package-registries/example'))
             self.assertEqual(bound['other']['registry'], 'https://example.invalid/@vendor@')
 
+    def test_patch_and_local_registry_paths_bind_without_changing_urls_or_identities(self):
+        import tomllib
+        with tempfile.TemporaryDirectory() as temporary:
+            vendor = (Path(temporary) / 'vendor "quote" \\backslash|pipe').resolve()
+            (vendor / '.cargo').mkdir(parents=True)
+            registry = 'https://example.invalid/@vendor@'
+            package_path = '@vendor@/provided "quote" \\backslash|pipe'
+            config = ('paths = ["cargo-vendor-dir/legacy", "@vendor@/override", "relative"]\n'
+                      '[source.directory]\ndirectory="@vendor@/.package-registries/registry"\n'
+                      '[source.local]\nlocal-registry="@vendor@/index"\n'
+                      '[source.remote]\nregistry=' + json.dumps(registry) + '\n'
+                      '[source.git]\ngit=' + json.dumps(registry + '/repo') + '\n'
+                      '[registries."mirror @vendor@"]\nindex=' + json.dumps('sparse+' + registry) + '\n'
+                      '[patch.' + json.dumps(registry) + ']\n'
+                      'provided={package="identity",path=' + json.dumps(package_path) + '}\n'
+                      'legacy={path="cargo-vendor-dir/legacy"}\n'
+                      'absolute={path="/already/absolute"}\n'
+                      'remote={git=' + json.dumps(registry + '/repo') + ',branch="@vendor@"}\n')
+            (vendor / '.cargo/config.toml').write_text(config)
+            bound = tomllib.loads(cargo_purify.vendor_configuration(vendor))
+            self.assertEqual(bound['source']['directory']['directory'], str(vendor / '.package-registries/registry'))
+            self.assertEqual(bound['source']['local']['local-registry'], str(vendor / 'index'))
+            self.assertEqual(bound['paths'], [str(vendor / 'legacy'), str(vendor / 'override'), 'relative'])
+            self.assertEqual(bound['source']['remote']['registry'], registry)
+            self.assertEqual(bound['source']['git']['git'], registry + '/repo')
+            self.assertEqual(bound['registries']['mirror @vendor@']['index'], 'sparse+' + registry)
+            patches = bound['patch'][registry]
+            self.assertEqual(patches['provided'], {'package': 'identity', 'path': package_path.replace('@vendor@', str(vendor))})
+            self.assertEqual(patches['legacy']['path'], str(vendor / 'legacy'))
+            self.assertEqual(patches['absolute']['path'], '/already/absolute')
+            self.assertEqual(patches['remote'], {'git': registry + '/repo', 'branch': '@vendor@'})
+
     def test_package_capture_uses_external_lock_and_restores_workspace_lock(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
