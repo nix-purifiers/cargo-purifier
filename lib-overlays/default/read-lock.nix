@@ -119,7 +119,13 @@ let
     lib.any (entry: entry.name == package.name && entry.version == package.version) (
       checked.provided or [ ]
     );
-  sourced = lib.filter (package: package ? source && !(supplied package)) packages;
+  packageCargoLocks = checked.packageCargoLocks or { };
+  packageDependencies = lib.concatMap (text: (builtins.fromTOML text).package or [ ]) (
+    builtins.attrValues packageCargoLocks
+  );
+  sourced = lib.unique (
+    lib.filter (package: package ? source && !(supplied package)) (packages ++ packageDependencies)
+  );
   cratesIoPackages = lib.filter (package: package.source == cratesIo) sourced;
   registryPackages = lib.filter (
     package: isRegistry package.source && package.source != cratesIo
@@ -221,6 +227,7 @@ let
 in
 {
   purifier = "cargo-purifier";
+  inherit packageCargoLocks;
   projectInputs = checked.projectInputs or [ ];
   provided = checked.provided or [ ];
   entries = cratesIoEntries ++ registryEntries ++ gitEntries;

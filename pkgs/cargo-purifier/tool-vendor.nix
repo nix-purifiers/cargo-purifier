@@ -33,6 +33,8 @@ let
     inherit cargoLock;
     inherit (lock) entries;
     provided = lock.provided or [ ];
+    packageCargoLocks = lock.packageCargoLocks or { };
+    python3 = pkgs.python3;
   };
   purifier =
     if sharedSource == null then
@@ -72,23 +74,10 @@ in
 if stdlibLock == null then
   projectVendor
 else
-  pkgs.runCommand "cargo-vendor-with-stdlib" { nativeBuildInputs = [ pkgs.python3 ]; } ''
-      python3 - ${projectVendor} ${stdlib} "$out" <<'PY'
-    import json, pathlib, shutil, sys
-    project, stdlib, output = map(pathlib.Path, sys.argv[1:])
-    shutil.copytree(project, output, symlinks=True)
-    output.chmod(0o755)
-    for crate in stdlib.iterdir():
-        checksum = crate / '.cargo-checksum.json'
-        if not checksum.is_file():
-            continue
-        destination = output / crate.name
-        if destination.exists():
-            old = json.loads((destination / '.cargo-checksum.json').read_text())
-            new = json.loads(checksum.read_text())
-            if not old.get('package') or old['package'] != new.get('package'):
-                raise SystemExit('conflicting project/SDK crate: ' + crate.name)
-        else:
-            destination.symlink_to(crate)
-    PY
-  ''
+  pkgs.runCommand "cargo-vendor-with-stdlib"
+    {
+      nativeBuildInputs = [ (pkgs.python3.withPackages (p: [ p.tomlkit ])) ];
+    }
+    ''
+      python3 ${../build-cargo-project/package_vendor.py} --stdlib ${projectVendor} ${stdlib} "$out"
+    ''

@@ -17,6 +17,7 @@ import tomllib
 import tomlkit
 import cargo_publication
 
+from cargo_config import vendor_configuration
 from cargo_graph import VersionSelector, digest, graph_versions
 
 CRATES_IO = 'https://github.com/rust-lang/crates.io-index'
@@ -224,7 +225,7 @@ def project(request, out, catalog_path, cargo):
         vendor = request.get('vendor')
         if vendor:
             vendor = Path(vendor)
-            config = tomlkit.parse((vendor / '.cargo/config.toml').read_text().replace('@vendor@', str(vendor)))
+            config = tomlkit.parse(vendor_configuration(vendor))
             for directory in sorted(vendor.iterdir()):
                 if (directory / 'Cargo.toml').is_file():
                     package = tomllib.loads((directory / 'Cargo.toml').read_text())['package']
