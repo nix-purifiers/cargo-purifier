@@ -176,11 +176,6 @@ writeShellApplication {
       stop "the locked sources did not build: ''${reason:-see $state/nix-build.log}. Run \`cargo-purifier lock\` if Cargo.lock changed, or \`cargo-purifier prefetch\` while online before working offline."
     fi
 
-    # Some native build scripts generate files beside their own sources
-    # (Tauri permissions, for example). Use a writable private materialization;
-    # the vendor symlink above remains the immutable Nix store/GC root.
-    vendor=$(${lib.getExe command} _writable-vendor "$state" "$vendor")
-
     # rust-analyzer can run metadata and check concurrently. Never truncate
     # the configuration another Cargo process is reading: an empty config
     # silently disables vendoring and makes its offline resolution fail.
@@ -202,9 +197,11 @@ writeShellApplication {
     # Native Cargo children (for example cbindgen metadata) do not inherit
     # --config. Keep the caller's home unchanged and share the locked sources
     # through a private home with the original settings and cache links.
+    # Its writable registry sources stay beneath that home, matching native
+    # Cargo location semantics; the vendor symlink remains the immutable root.
     export CARGO_HOME
-    CARGO_HOME=$(${lib.getExe command} _inherited-cargo-home "$state" "$state/config.toml")
+    CARGO_HOME=$(${lib.getExe command} _inherited-cargo-home "$state" "$state/config.toml" "$vendor")
     export CARGO_NET_OFFLINE=true
-    exec "$real" --config "$state/config.toml" --offline "$@"
+    exec "$real" --config "$CARGO_HOME/config.toml" --offline "$@"
   '';
 }

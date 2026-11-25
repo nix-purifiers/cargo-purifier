@@ -67,7 +67,15 @@ pkgs.runCommand "cargo-stdlib-vendor"
     sdk = json.loads((root / 'sdk.json').read_text())
     assert {p['version'] for p in project['packages'] if p['name'] == 'itoa'} == {'1.0.18'}
     assert {p['version'] for p in sdk['packages'] if p['name'] == 'itoa'} == {'1.0.0'}
-    assert all('/vendor-worktrees/' in p['manifest_path'] for p in sdk['packages'] if p['source'])
+    registry_packages = [package for package in sdk['packages'] if package['source']]
+    assert registry_packages
+    for package in registry_packages:
+        manifest = pathlib.Path(package['manifest_path'])
+        home = next(parent for parent in manifest.parents
+                    if (parent / '.cargo-purifier-original-home').is_file())
+        assert manifest.is_relative_to(home / 'registry/src')
+        assert home.parent == pathlib.Path.cwd() / 'target/cargo-purifier/cargo-homes'
+        assert pathlib.Path((home / '.cargo-purifier-original-home').read_text()) == root / 'empty-cargo-home'
     for name in ('config-sdk', 'env-sdk', 'cli-sdk'):
         assert json.loads((root / (name + '.json')).read_text()) == sdk
     PY
