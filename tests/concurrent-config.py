@@ -42,11 +42,8 @@ def main():
              str(project / 'Cargo.lock'), str(project / 'cargo-purifier.lock.json')],
             env=environment, text=True)
         (state / 'stamp').write_text(digest)
-        worktree = Path(subprocess.check_output(
-            [str(args.tools / 'bin/cargo-purifier'), '_writable-vendor', str(state), str(vendor)],
-            cwd=project, env=environment, text=True).strip())
         original = subprocess.check_output(
-            [str(args.tools / 'bin/cargo-purifier'), '_vendor-configuration', str(worktree)],
+            [str(args.tools / 'bin/cargo-purifier'), '_vendor-configuration', str(vendor)],
             cwd=project, env=environment)
         config.write_bytes(original)
         reader = [str(args.cargo), '--config', str(config), 'metadata',
@@ -58,7 +55,7 @@ def main():
 
         before = read_graph()
         assert before.returncode == 0, before.stderr
-        fifo = worktree / '.cargo/config.toml'
+        fifo = vendor / '.cargo/config.toml'
         fifo.unlink()
         os.mkfifo(fifo)
         writer = subprocess.Popen([str(args.tools / 'bin/cargo'), 'metadata',

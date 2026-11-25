@@ -130,3 +130,8 @@ with tempfile.TemporaryDirectory(prefix='cargo-composition-') as temporary:
     from external_lock_native import verify_external_native_lock
     verify_external_native_lock(tools, root / 'external-native-lock', environment)
     print('PASS cargo.composition.source-pinned-pure-consumer')
+
+with tempfile.TemporaryDirectory(prefix="cargo-registry-home-") as temporary:
+    from registry_home_native import verify_registry_cargo_home
+    verify_registry_cargo_home(tools, Path(temporary) / "fixture",
+                               dict(os.environ, PATH=str(tools / "bin") + ":" + os.environ["PATH"]))

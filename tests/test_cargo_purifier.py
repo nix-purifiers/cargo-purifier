@@ -590,6 +590,69 @@ class WritableVendor(unittest.TestCase):
 
 
 class InheritedCargoHome(unittest.TestCase):
+    def test_registry_sources_and_supplier_paths_live_under_the_effective_home(self):
+        with tempfile.TemporaryDirectory(prefix="cargo home ' | ") as temporary:
+            root = Path(temporary).resolve()
+            vendor = root / 'vendor'
+            (vendor / '.cargo').mkdir(parents=True)
+            (vendor / 'registry-crate').mkdir()
+            (vendor / 'registry-crate/build.rs').write_text('authentic fixture source')
+            (vendor / 'local-registry').mkdir()
+            (vendor / 'supplier').mkdir()
+            (vendor / 'supplier/lib.rs').write_text('supplier')
+            config = ('paths=["@vendor@/supplier","@vendor@/../outside"]\n'
+                      '[source.archive]\nlocal-registry="@vendor@/local-registry"\n'
+                      '[source.crates-io]\nreplace-with="frozen"\n'
+                      '[source.frozen]\ndirectory="@vendor@/registry-crate"\n'
+                      '[patch."https://example.test/@vendor@"]\n'
+                      'supplier={path="@vendor@/supplier"}\n')
+            (vendor / '.cargo/config.toml').write_text(config)
+            bound = root / 'bound.toml'
+            bound.write_text(cargo_purify.vendor_configuration(vendor))
+            caller = root / 'caller'
+            (caller / 'registry/src/native-index').mkdir(parents=True)
+            (caller / 'registry/src/native-index/cache').write_text('cached')
+            with mock.patch.dict(os.environ, CARGO_HOME=str(caller)):
+                home = cargo_purify.inherited_cargo_home(root / 'state', bound, vendor)
+                same = cargo_purify.inherited_cargo_home(root / 'state', bound, vendor)
+                bound.write_text(bound.read_text() + '\n[source.other]\ndirectory="/unrelated/different"\n')
+                other = cargo_purify.inherited_cargo_home(root / 'state', bound, vendor)
+            self.assertEqual(home, same)
+            self.assertNotEqual(home, other)
+            data = cargo_purify.tomllib.loads((home / 'config.toml').read_text())
+            source = Path(data['source']['frozen']['directory'])
+            self.assertTrue(source.is_relative_to(home))
+            self.assertEqual((source / 'build.rs').read_text(), 'authentic fixture source')
+            supplier = Path(data['patch']['https://example.test/@vendor@']['supplier']['path'])
+            self.assertTrue(supplier.is_relative_to(home))
+            self.assertTrue(Path(data['source']['archive']['local-registry']).is_relative_to(home))
+            self.assertEqual(data['paths'][0], str(supplier))
+            self.assertEqual(data['paths'][1], str(vendor) + '/../outside')
+            self.assertFalse((cargo_purify.cargo_home_vendor(home, vendor) / '.cargo').exists())
+            (source / 'build.rs').write_text('build-script output')
+            self.assertEqual((vendor / 'registry-crate/build.rs').read_text(), 'authentic fixture source')
+            other_data = cargo_purify.tomllib.loads((other / 'config.toml').read_text())
+            self.assertEqual((Path(other_data['source']['frozen']['directory']) / 'build.rs').read_text(),
+                             'authentic fixture source')
+            self.assertEqual((home / 'registry/src/native-index/cache').read_text(), 'cached')
+            self.assertFalse((caller / 'config.toml').exists())
+
+    def test_original_registry_namespace_collision_refuses_without_publishing(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            vendor, caller = root / 'vendor', root / 'caller'
+            vendor.mkdir()
+            namespace = cargo_purify.cargo_home_vendor(root, vendor).name
+            (caller / 'registry/src' / namespace).mkdir(parents=True)
+            configuration = root / 'config.toml'
+            configuration.write_text('[source.crates-io]\nreplace-with="frozen"\n'
+                                     '[source.frozen]\ndirectory="' + str(vendor) + '"\n')
+            with mock.patch.dict(os.environ, CARGO_HOME=str(caller)):
+                with self.assertRaisesRegex(cargo_purify.Failure, 'registry namespace collides'):
+                    cargo_purify.inherited_cargo_home(root / 'state', configuration, vendor)
+            self.assertEqual(list((root / 'state/cargo-homes').iterdir()), [])
+            self.assertTrue((caller / 'registry/src' / namespace).is_dir())
+
     def test_project_source_identity_survives_an_unrelated_working_directory(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

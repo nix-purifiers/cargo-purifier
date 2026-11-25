@@ -62,10 +62,20 @@ pkgs.runCommand "cargo-writable-vendor"
     cargo test --offline
     cmp "$TMPDIR/original-config" "$CARGO_HOME/config"
     test ! -e ${vendor}/source-generator-1.0.0/generated
-    find "$XDG_CACHE_HOME/cargo-purifier/vendor-worktrees" -name permissions.toml | grep .
+    generated=$(find target/cargo-purifier/cargo-homes \
+      -path '*/registry/src/*/source-generator-1.0.0/generated/permissions.toml')
+    test -f "$generated"
+    test "$(cat "$generated")" = 'allow = true'
+    registry_fixture_home=''${generated%/registry/src/*}
+    test "$(cat "$registry_fixture_home/.cargo-purifier-original-home")" = "$CARGO_HOME"
+    test ! -e "$CARGO_HOME/registry/src"
     # A second command reuses the local source copy and its generated files.
     cargo test --offline
     test ! -e ${vendor}/source-generator-1.0.0/generated
+    test "$(find target/cargo-purifier/cargo-homes \
+      -path '*/registry/src/*/source-generator-1.0.0/generated/permissions.toml')" = "$generated"
+    cmp "$TMPDIR/original-config" "$CARGO_HOME/config"
+    test ! -e "$CARGO_HOME/registry/src"
     project=$PWD
     mkdir -p "$TMPDIR/unrelated/src"
     cat > "$TMPDIR/unrelated/Cargo.toml" <<'EOF_OTHER'

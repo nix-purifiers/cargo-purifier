@@ -927,7 +927,13 @@ def rebase_home_config(data, path):
     return data
 
 
-def inherited_cargo_home(state, configuration):
+def cargo_home_vendor(home, vendor):
+    """Keep registry sources under the Cargo home that native build scripts see."""
+    identity = hashlib.sha256(os.fsencode(Path(vendor).resolve())).hexdigest()
+    return Path(home) / 'registry/src' / f'cargo-purifier-{identity}-{identity[:16]}'
+
+
+def inherited_cargo_home(state, configuration, vendor=None):
     """Give native child Cargo processes the same locked sources as their parent.
 
     CLI --config is not inherited by cbindgen and other build-script queries.
@@ -960,6 +966,10 @@ def inherited_cargo_home(state, configuration):
     replacement = tomllib.loads(replacement_text)
     for name, value in replacement.get('source', {}).items():
         data.setdefault('source', {}).setdefault(name, {}).update(value)
+    for registry, patches in replacement.get('patch', {}).items():
+        data.setdefault('patch', {}).setdefault(registry, {}).update(patches)
+    if 'paths' in replacement:
+        data['paths'] = [*data.get('paths', []), *replacement['paths']]
     # Project config has higher precedence than global config. Complete its
     # replacement chains too, so a project-level crates-io -> local alias still
     # terminates at the locked vendor rather than an uncaptured mutable tree.
@@ -974,20 +984,54 @@ def inherited_cargo_home(state, configuration):
                 inherited['replace-with'] = destination_source
     data.setdefault('net', {})['offline'] = True
     identity = hashlib.sha256(os.fsencode(original) + b'\0' + text.encode()
+                              + b'\0' + replacement_text.encode()
                               + b'\0' + tomlkit.dumps(data).encode()).hexdigest()
+    if vendor is not None:
+        vendor = Path(vendor).resolve()
+        identity = hashlib.sha256(identity.encode() + b'\0' + os.fsencode(vendor)).hexdigest()
     homes = state / 'cargo-homes'
     homes.mkdir(parents=True, exist_ok=True)
     destination = homes / identity
+    if vendor is not None:
+        repository_tools()
+        from cargo_config import relocate_configuration
+        local_vendor = cargo_home_vendor(destination, vendor)
+        data = tomlkit.parse(relocate_configuration(tomlkit.dumps(data), vendor, local_vendor))
     with (state / 'cargo-home.lock').open('a') as guard:
         fcntl.flock(guard, fcntl.LOCK_EX)
         if not destination.is_dir():
             with tempfile.TemporaryDirectory(prefix='.home-', dir=homes) as temporary:
                 staged = Path(temporary) / 'home'
                 staged.mkdir(mode=0o700)
+                if vendor is not None:
+                    copied = cargo_home_vendor(staged, vendor)
+                    copied.parent.mkdir(parents=True)
+                    copied.mkdir()
+                    # Root .cargo contains the generated vendor template, already
+                    # bound into this home's config. Package-local .cargo files
+                    # remain part of their authentic source trees.
+                    for entry in vendor.iterdir():
+                        if entry.name != '.cargo':
+                            copy_vendor_tree(entry, copied / entry.name, vendor, copied)
+                    for directory, _, files in os.walk(copied):
+                        for path in [Path(directory), *(Path(directory) / name for name in files)]:
+                            if not path.is_symlink():
+                                path.chmod(stat.S_IMODE(path.stat().st_mode) | stat.S_IWUSR)
                 if original.is_dir():
                     for entry in original.iterdir():
                         if entry.name not in ('config', 'config.toml', '.cargo-purifier-original-home'):
-                            (staged / entry.name).symlink_to(entry)
+                            if vendor is not None and entry.name == 'registry' and entry.is_dir():
+                                for child in entry.iterdir():
+                                    if child.name == 'src' and child.is_dir():
+                                        for source in child.iterdir():
+                                            link = staged / 'registry/src' / source.name
+                                            if link.exists() or link.is_symlink():
+                                                raise Failure(f"caller registry namespace collides with locked sources: {source.name}")
+                                            link.symlink_to(source)
+                                    else:
+                                        (staged / 'registry' / child.name).symlink_to(child)
+                            else:
+                                (staged / entry.name).symlink_to(entry)
                 (staged / 'config.toml').write_text(tomlkit.dumps(data))
                 (staged / '.cargo-purifier-original-home').write_text(str(original))
                 staged.rename(destination)
@@ -1288,7 +1332,6 @@ def delegated_command(root, lock_path, cargo_lock, state, cargo, arguments):
                             "--arg", "cargoLock", path_arg(cargo_lock),
                             *stdlib_vendor_args(arguments),
                             "--out-link", str(directory / "vendor")))
-    vendor = writable_vendor(directory, vendor)
     text = vendor_configuration(vendor)
     configuration = delegation_configuration(directory, text)
     if state["entries"]:
@@ -1302,8 +1345,9 @@ def delegated_command(root, lock_path, cargo_lock, state, cargo, arguments):
             patches = document.get('patch', {}).get('crates-io', {})
             patches.pop(key, None)
         configuration = delegation_configuration(directory, tomlkit.dumps(document))
-    environment = native_environment(CARGO_NET_OFFLINE="true",
-                                     CARGO_HOME=str(inherited_cargo_home(directory, configuration)))
+    home = inherited_cargo_home(directory, configuration, vendor)
+    configuration = home / "config.toml"
+    environment = native_environment(CARGO_NET_OFFLINE="true", CARGO_HOME=str(home))
     command = [cargo, "metadata", "--manifest-path", str(root / "Cargo.toml"), "--offline", "--locked",
                "--format-version", "1"]
     if state['entries']:
@@ -1389,9 +1433,10 @@ def native_command(options):
             "--arg", "cargoLock", path_arg(cargo_lock),
             *stdlib_vendor_args(arguments),
             "--out-link", str(directory / "vendor")))
-        vendor = writable_vendor(directory, vendor)
-        configuration = directory / "config.toml"
-        configuration.write_text(vendor_configuration(vendor))
+        configuration = delegation_configuration(directory, vendor_configuration(vendor))
+        home = inherited_cargo_home(directory, configuration, vendor)
+        vendor = cargo_home_vendor(home, vendor)
+        configuration = home / "config.toml"
         from cargo_inputs import borrowed_manifests, hydrate_lock
         saved = (root / "Cargo.lock").read_bytes()
         try:
@@ -1406,7 +1451,7 @@ def native_command(options):
                     raise Failure("the locked Cargo graph changed; run cargo-purifier lock")
                 return subprocess.call([*command, "--offline", *arguments],
                                        env=dict(os.environ, CARGO_PURIFIER="0",
-                                                CARGO_HOME=str(inherited_cargo_home(directory, configuration)),
+                                                CARGO_HOME=str(home),
                                                 CARGO_NET_OFFLINE="true"))
         finally:
             (root / "Cargo.lock").write_bytes(saved)
@@ -1444,9 +1489,9 @@ def main(argv):
         print(vendor_configuration(args[1]), end="")
         return 0
     if args and args[0] == "_inherited-cargo-home":
-        if len(args) != 3:
-            raise Failure("_inherited-cargo-home needs a state directory and Cargo config path")
-        print(inherited_cargo_home(args[1], args[2]))
+        if len(args) not in (3, 4):
+            raise Failure("_inherited-cargo-home needs a state directory, Cargo config path, and optional vendor directory")
+        print(inherited_cargo_home(args[1], args[2], args[3] if len(args) == 4 else None))
         return 0
     # cargo runs an external subcommand with the subcommand's name first.
     if args[:1] == ["purifier"]:
