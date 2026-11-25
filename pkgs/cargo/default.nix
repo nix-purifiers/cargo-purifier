@@ -126,7 +126,9 @@ writeShellApplication {
       echo "cargo-purifier: warning: no cargo-purifier.lock.json found; running cargo impurely. Run \`cargo-purifier lock\` to use Nix-resolved dependencies." >&2
       exec "$real" "$@"
     fi
-    if grep -q '"projectInputs"' "$lock"; then
+    # External native locks need the transaction that restores the workspace's
+    # original Cargo.lock (including its absence) after the command returns.
+    if [ -n "''${CARGO_PURIFIER_TOOL_LOCKFILE:-}" ] || grep -q '"projectInputs"' "$lock"; then
       exec ${lib.getExe command} _cargo --root "$root" \
         --native-cargo "$real" --subcommand "$sub" -- "$@"
     fi
@@ -137,13 +139,6 @@ writeShellApplication {
       *) exec ${lib.getExe command} _cargo --root "$root" \
         --native-cargo "$real" --subcommand "$sub" -- "$@" ;;
     esac
-    # cargo reads Cargo.lock only from the workspace root, so a Cargo.lock
-    # kept outside the tree is copied there.
-    tool_lock=''${CARGO_PURIFIER_TOOL_LOCKFILE:-}
-    if [ -n "$tool_lock" ] && [ -f "$tool_lock" ] && ! cmp -s "$tool_lock" "$root/Cargo.lock"; then
-      cp "$tool_lock" "$root/Cargo.lock"
-      chmod u+w "$root/Cargo.lock"
-    fi
     if [ ! -f "$root/Cargo.lock" ]; then
       echo "cargo-purifier: Cargo.lock is missing beside an existing purifier lock; run cargo-purifier lock" >&2
       exit 101

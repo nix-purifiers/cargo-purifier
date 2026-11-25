@@ -127,4 +127,6 @@ with tempfile.TemporaryDirectory(prefix='cargo-composition-') as temporary:
     assert not list((consumer / 'target/cargo-purifier/inputs').glob('[0-9]*'))
     assert not (consumer / 'target/cargo-purifier/prefetch').exists()
     assert run(tools / 'bin/cargo', 'run', '--quiet', cwd=consumer, env=environment) == 'ordinary\n'
+    from external_lock_native import verify_external_native_lock
+    verify_external_native_lock(tools, root / 'external-native-lock', environment)
     print('PASS cargo.composition.source-pinned-pure-consumer')
